@@ -113,3 +113,47 @@ def upsert_user(data: Dict[str, Any]) -> None:
     with _conn() as conn:
         with conn.cursor() as cur:
             cur.execute(sql, values)
+
+
+def get_user_by_email(email: str) -> Dict[str, Any] | None:
+    """Retrieve user by email from database.
+    
+    Returns a dict with user data including password_hash, or None if not found.
+    """
+    if not email:
+        return None
+    
+    sql = """
+    SELECT email, password_hash, first_name, last_name, age, 
+           marital_status, employment_status, has_children, 
+           number_of_children, extra
+    FROM users
+    WHERE email = %s
+    LIMIT 1;
+    """
+    
+    try:
+        with _conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, (email,))
+                row = cur.fetchone()
+                
+                if row is None:
+                    return None
+                
+                # Map row to dictionary
+                return {
+                    "email": row[0],
+                    "password_hash": row[1],
+                    "first_name": row[2],
+                    "last_name": row[3],
+                    "age": row[4],
+                    "marital_status": row[5],
+                    "employment_status": row[6],
+                    "has_children": row[7],
+                    "number_of_children": row[8],
+                    "extra": row[9] if row[9] else {},
+                }
+    except Exception:
+        # If database is not configured or connection fails, return None
+        return None

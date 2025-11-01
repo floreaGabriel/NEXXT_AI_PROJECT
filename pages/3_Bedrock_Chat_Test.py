@@ -17,6 +17,18 @@ render_sidebar_info()
 
 st.title("🔧 Bedrock Chat Test (Claude via LiteLLM)")
 
+# Require login to access chat
+if not st.session_state.get("auth", {}).get("logged_in"):
+    st.warning("Pentru a accesa chat-ul Bedrock, autentificați-vă sau înregistrați-vă.")
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("→ Autentificare", use_container_width=True):
+            st.switch_page("pages/0_Login.py")
+    with c2:
+        if st.button("→ Înregistrare", use_container_width=True):
+            st.switch_page("pages/1_Register.py")
+    st.stop()
+
 st.write(
     """
     This page makes a real request to Claude (via AWS Bedrock and LiteLLM) using the

@@ -27,6 +27,7 @@ from src.agents.user_experience_summary_agent import (
     personalize_products_batch,  # Direct function for personalization
 )
 from src.agents.product_title_generation_agent import product_title_agent
+from src.agents.email_summary_agent import email_summary_agent
 
 apply_button_styling()
 render_sidebar_info()
@@ -36,9 +37,11 @@ st.title("🎯 Recomandări Personalizate de Produse")
 # Top auth nav (from Sabin page)
 nav_col1, nav_col2, nav_col3 = st.columns(3)
 with nav_col1:
-    st.page_link("pages/0_Login.py", label="Login")
+    if st.button("Login", use_container_width=True):
+        st.switch_page("pages/0_Login.py")
 with nav_col2:
-    st.page_link("pages/1_Register.py", label="Register")
+    if st.button("Register", use_container_width=True):
+        st.switch_page("pages/1_Register.py")
 with nav_col3:
     if st.session_state.get("auth", {}).get("logged_in"):
         email = st.session_state["auth"]["email"]
@@ -47,6 +50,18 @@ with nav_col3:
             st.session_state.pop("user_profile", None)
             st.rerun()
         st.caption(f"Autentificat ca: {email}")
+
+# Require authentication to proceed further
+if not st.session_state.get("auth", {}).get("logged_in"):
+    st.warning("Pentru a accesa recomandările personalizate și a primi sumarul pe email, vă rugăm să vă autentificați sau să vă înregistrați.")
+    link_col1, link_col2 = st.columns(2)
+    with link_col1:
+        if st.button("→ Autentificare", use_container_width=True):
+            st.switch_page("pages/0_Login.py")
+    with link_col2:
+        if st.button("→ Înregistrare", use_container_width=True):
+            st.switch_page("pages/1_Register.py")
+    st.stop()
 
 st.write(
     """
