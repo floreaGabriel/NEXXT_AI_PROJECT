@@ -1,0 +1,37 @@
+version: "3.9"
+
+services:
+  mcp-postgres:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: mcp-postgres:latest
+    environment:
+      PGHOST: ${PGHOST}
+      PGPORT: ${PGPORT:-5432}
+      PGUSER: ${PGUSER}
+      PGPASSWORD: ${PGPASSWORD}
+      PGDATABASE: ${PGDATABASE}
+      PGSSLMODE: ${PGSSLMODE:-prefer}
+      READ_ONLY: ${READ_ONLY:-true}
+      QUERY_ROW_LIMIT: ${QUERY_ROW_LIMIT:-200}
+      SERVER_HOST: 0.0.0.0
+      SERVER_PORT: 8042
+    ports:
+      - "8042:8042"
+    restart: unless-stopped
+
+  # Optional local Postgres for testing (uncomment to use)
+  # postgres:
+  #   image: postgres:16
+  #   environment:
+  #     POSTGRES_USER: demo
+  #     POSTGRES_PASSWORD: demo
+  #     POSTGRES_DB: demo
+  #   ports:
+  #     - "5432:5432"
+  #   volumes:
+  #     - pgdata:/var/lib/postgresql/data
+
+volumes:
+  pgdata:

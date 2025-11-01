@@ -40,6 +40,7 @@ st.write(
 
 st.divider()
 
+
 # --- Product Catalog with Base English Summaries (from NLP stage) ---
 # In production, these would come from a database or NLP summarization service
 PRODUCT_BASE_SUMMARIES = {
@@ -186,6 +187,7 @@ if st.button("🔍 Obține Recomandări", type="primary", use_container_width=Tr
     if not AWS_BEDROCK_API_KEY:
         st.error("Vă rugăm configurați cheia API Bedrock (AWS_BEARER_TOKEN_BEDROCK) în fișierul .env")
     else:
+
         with st.spinner("Analizăm profilul și generăm recomandări personalizate prin AI..."):
             try:
                 # Create user profile
@@ -397,6 +399,7 @@ Return ONLY a JSON array with this exact structure:
                             match_percent = int(product['score'] * 100)
                             st.progress(product['score'], text=f"Potrivire: {match_percent}%")
                         
+
                         # Romanian product description
                         st.write(product['description'])
                         

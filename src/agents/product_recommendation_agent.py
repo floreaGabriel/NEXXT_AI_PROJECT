@@ -26,6 +26,7 @@ class ProductRecommendationContext(BaseModel):
     session_id: str | None = None
 
 
+
 def _get_products_catalog_dict() -> dict:
     """Internal helper: return products catalog as dict."""
     products = {
@@ -215,6 +216,7 @@ def rank_products_for_profile(user_profile_json: str) -> list[dict]:
 def rank_products_for_user(
     user_profile_json: Annotated[str, "JSON representation of user profile"],
 ) -> str:
+
     """FunctionTool: Rank all products and return as JSON string."""
     ranked = rank_products_for_profile(user_profile_json)
     return json.dumps(ranked, ensure_ascii=False)
