@@ -25,7 +25,7 @@ st.title("Autentificare")
 # Top nav shortcuts
 col_nav1, col_nav2 = st.columns(2)
 with col_nav1:
-    st.page_link("pages/0_Register.py", label="Nu ai cont? Înregistrează-te →")
+    st.page_link("pages/1_Register.py", label="Nu ai cont? Înregistrează-te →")
 with col_nav2:
     st.page_link("pages/2_Product_Recommendations_Florea.py", label="Recomandări produse →")
 

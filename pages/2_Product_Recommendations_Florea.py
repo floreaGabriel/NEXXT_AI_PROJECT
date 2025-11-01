@@ -37,7 +37,7 @@ nav_col1, nav_col2, nav_col3 = st.columns(3)
 with nav_col1:
     st.page_link("pages/0_Login.py", label="Login")
 with nav_col2:
-    st.page_link("pages/0_Register.py", label="Register")
+    st.page_link("pages/1_Register.py", label="Register")
 with nav_col3:
     if st.session_state.get("auth", {}).get("logged_in"):
         email = st.session_state["auth"]["email"]
