@@ -566,7 +566,7 @@ if st.session_state.ranked_products is not None:
                 # Create an expander for detailed logs
                 log_expander = st.expander("📋 Detalii Trimitere Email (Click pentru logs)", expanded=False)
                 
-                with st.spinner("Generăm emailul și îl trimitem..."):
+                with st.spinner("Generăm emailul HTML și îl trimitem..."):
                     try:
                         # Display SMTP configuration (masked password)
                         with log_expander:
@@ -586,68 +586,137 @@ FROM_EMAIL: {from_email}
                             """)
                             
                             st.write(f"**📧 Destinatar:** {user_email}")
-                            st.write("**📝 Generare conținut email...**")
+                            st.write("**🎨 Generare email HTML profesional Raiffeisen...**")
                         
-                        # Build a compact summary payload (top 5)
-                        top_items = []
-                        for pid, prod in ranked_products[:5]:
-                            top_items.append({
-                                "product_id": pid,
-                                "name_ro": prod.get("name_ro", prod.get("name", "")),
-                                "name_en": prod.get("name_en", prod.get("name", "")),
-                                "score": prod.get("score", 0),
-                                "summary": prod.get("personalized_summary") or prod.get("base_summary", prod.get("description", "")),
-                            })
-
-                        subject = "Recomandările dumneavoastră personalizate - Rezumat"
+                        # Build summary content in Markdown format
+                        with log_expander:
+                            st.write("**📝 Construire conținut recomandări...**")
                         
-                        # Get user profile from session
+                        # Get user profile data
                         user_profile_data = st.session_state.get("user_profile_data", {})
-                        user_profile_json = json.dumps(user_profile_data, ensure_ascii=False)
-                        items_json = json.dumps(top_items, ensure_ascii=False)
+                        age = user_profile_data.get("age", 35)
+                        annual_income = user_profile_data.get("annual_income", 50000)
+                        marital_status = user_profile_data.get("marital_status", "necăsătorit/ă")
+                        
+                        # Build Markdown content with top products
+                        markdown_content = f"""# Recomandările Dumneavoastră Personalizate
 
+**Data:** {asyncio.get_event_loop().time() if hasattr(asyncio, 'get_event_loop') else '02 Noiembrie 2025'}  
+**Consultant:** Raiffeisen Banking & Advisory
+
+---
+
+## Rezumat Profil
+
+Am analizat profilul dumneavoastră financiar și am identificat produsele cele mai potrivite pentru situația și obiectivele dumneavoastră.
+
+**Profilul dumneavoastră:**
+- Vârstă: {age} ani
+- Venit anual: {annual_income:,.0f} RON ({annual_income/12:,.0f} RON/lună)
+- Status: {marital_status}
+
+---
+
+## Produse Recomandate
+
+"""
+                        
+                        # Add top 5 products
+                        top_count = min(5, len(ranked_products))
+                        for idx, (pid, prod) in enumerate(ranked_products[:top_count], 1):
+                            product_name = llm_titles.get(pid, prod.get("name", pid))
+                            summary = prod.get("personalized_summary", "")
+                            score = int(prod.get("score", 0) * 100)
+                            
+                            markdown_content += f"""### {idx}. {product_name}
+
+**Potrivire:** {score}% compatibil cu profilul dumneavoastră
+
+{summary}
+
+---
+
+"""
+                        
+                        # Add call to action
+                        markdown_content += """## Pași Următori
+
+Pentru a accesa aceste produse și a discuta detaliile:
+
+1. Programați o consultanță gratuită cu un specialist Raiffeisen
+2. Pregătiți documentele necesare (CI, adeverință venit)
+3. Contactați-ne la numărul *2000 (gratuit)
+
+---
+
+*Recomandări generate de NEXXT AI Banking Assistant*  
+*Pentru consultanță personalizată, contactați echipa Raiffeisen Banking & Advisory*
+"""
+                        
                         with log_expander:
-                            st.write(f"**📋 Subiect email:** {subject}")
-                            st.write(f"**🎯 Produse incluse:** {len(top_items)}")
-
-                        prompt = (
-                            f"Recipient: {user_email}\n"
-                            f"Subject: {subject}\n\n"
-                            "Instrucțiuni: Redactează un email scurt în limba română (fără emoji), politicos, "
-                            "cu un rezumat al recomandărilor de mai jos. Menține 120–200 cuvinte, listează 3–5 produse cu câte o propoziție.\n\n"
-                            f"Profil utilizator (JSON): {user_profile_json}\n\n"
-                            f"Produse (JSON): {items_json}\n\n"
-                            "După ce finalizezi textul emailului, apelează tool-ul send_email cu câmpurile: to, subject, body."
+                            st.write(f"**✅ Conținut Markdown generat:** {len(markdown_content)} caractere")
+                            st.write("**� Conversie Markdown → HTML Raiffeisen...**")
+                        
+                        # Convert to HTML with Raiffeisen design
+                        from src.utils.html_converter import convert_financial_plan_to_html, clean_markdown_for_email
+                        
+                        # Get user name if available from session
+                        user_name = st.session_state.get("auth", {}).get("email", "").split("@")[0].title()
+                        
+                        cleaned_md = clean_markdown_for_email(markdown_content)
+                        html_content = convert_financial_plan_to_html(
+                            cleaned_md,
+                            client_name=user_name if user_name else None,
+                            client_age=age,
+                            client_income=annual_income
                         )
-
+                        
                         with log_expander:
-                            st.write("**🤖 Apelare AI Agent pentru generare email...**")
+                            st.write(f"**✅ HTML generat:** {len(html_content)} caractere")
+                            st.write(f"**🎨 Design:** Raiffeisen Bank (Galben #FFED00 & Alb)")
+                            st.write("**📤 Trimitere email HTML...**")
+
+                        subject = "Recomandările Dumneavoastră Personalizate - Raiffeisen Bank"
 
                         async def _send():
-                            """Trimite email folosind MCP Email Server cu conexiune explicită."""
+                            """Trimite email HTML folosind MCP Email Server."""
                             from agents.mcp import MCPServerStdio
                             from src.utils.mcp_email_client import get_mcp_email_server_config
                             from src.config.settings import build_default_litellm_model
                             from agents import Agent, ModelSettings
+                            from src.agents.html_email_agent import html_email_agent
                             
                             # Creează și conectează MCP serverul
                             mcp_server = MCPServerStdio(get_mcp_email_server_config())
                             await mcp_server.connect()
                             
-                            # Creează agent cu MCP server conectat
-                            temp_agent = Agent(
-                                name="Email Summary Sender",
-                                instructions=email_summary_agent.instructions,
-                                mcp_servers=[mcp_server],
-                                model=build_default_litellm_model(),
-                                model_settings=ModelSettings(include_usage=True),
-                            )
+                            # Configurează agentul HTML cu MCP server
+                            html_email_agent.mcp_servers = [mcp_server]
+                            html_email_agent.model = build_default_litellm_model()
+                            html_email_agent.model_settings = ModelSettings(include_usage=True)
+                            
+                            # Prompt pentru agent
+                            prompt = f"""Send an HTML email with the following details:
+
+RECIPIENT: {user_email}
+SUBJECT: {subject}
+
+HTML BODY (complete HTML document with Raiffeisen branding):
+{html_content}
+
+CRITICAL INSTRUCTIONS:
+- Use send_email tool
+- Set html parameter to boolean true (not string, actual boolean)
+- This enables HTML rendering in the email client
+- Send immediately without modifying the HTML
+
+Please send this professional HTML email now."""
                             
                             # Rulează agentul
-                            return await Runner.run(temp_agent, prompt)
+                            return await Runner.run(html_email_agent, prompt)
 
                         with log_expander:
-                            st.write("**📤 Trimitere email prin MCP Server...**")
+                            st.write("**📤 Trimitere email HTML prin MCP Server...**")
                         
                         send_result = asyncio.run(_send())
                         
@@ -661,7 +730,7 @@ FROM_EMAIL: {from_email}
                             else:
                                 st.write(str(send_result))
                         
-                        st.success(f"✅ **Email trimis cu succes către: {user_email}**\n\nVerifică inbox-ul (și folder-ul Spam)!")
+                        st.success(f"✅ **Email HTML trimis cu succes către: {user_email}**\n\n🎨 Design: Raiffeisen Bank (Galben & Alb)\n\nVerifică inbox-ul (și folder-ul Spam)!")
                         
                     except Exception as e:
                         error_msg = str(e)
