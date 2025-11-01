@@ -327,7 +327,7 @@ INSTRUCȚIUNI CRITICE PENTRU PERSONALIZARE AVANSATĂ:
    - Folosește description ca sursă de adevăr pentru caracteristicile produsului
 
 6. **FORMAT OUTPUT**: 
-   - Maxim 3-4 propoziții
+   - Maxim 4-5 propoziții
    - Include recomandare concretă (sumă RON sau strategie)
    - Explică DE CE această sumă/strategie se potrivește profilului
    - Limbaj accesibil dar profesionist
