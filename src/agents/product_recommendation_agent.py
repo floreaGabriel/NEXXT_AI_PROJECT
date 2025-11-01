@@ -18,7 +18,7 @@ class UserProfile(BaseModel):
     has_children: bool = False
     risk_tolerance: str | None = None  # low, medium, high
     financial_goals: list[str] = []  # e.g., ["savings", "investment", "home_purchase"]
-    
+
 
 class ProductRecommendationContext(BaseModel):
     """Context for product recommendation operations."""
@@ -29,65 +29,74 @@ class ProductRecommendationContext(BaseModel):
 def _get_products_catalog_dict() -> dict:
     """Internal helper: return products catalog as dict."""
     products = {
-        "carduri_cumparaturi": {
-            "name": "Card de Cumpărături",
-            "description": "Card de credit special pentru cumpărături cu rate fixe și fără dobândă",
-            "benefits": ["Rate fără dobândă la parteneri", "Cashback până la 5%", "Asigurare achizitii"],
-            "target_audience": "Clienți cu venituri regulate care fac cumpărături frecvente"
+        "shopping_credit_card": {
+            "name": "Shopping Credit Card",
+            "description": "Credit card with interest-free installment options at partner merchants",
+            "benefits": ["Up to 12 interest-free installments", "Available for purchases at partner stores", "Maximum transaction value 40,000 RON or 10,000 EUR"],
+            "target_audience": "Customers with regular income who make frequent purchases at partner merchants"
         },
-        "depozite_termen": {
-            "name": "Depozit la Termen",
-            "description": "Depozit bancar cu dobândă fixă și garantată",
-            "benefits": ["Dobânzi competitive", "Sumă garantată", "Diverse perioade (1-60 luni)"],
-            "target_audience": "Clienți care doresc să economisească fără risc"
+        
+        "term_deposits": {
+            "name": "Term Deposits",
+            "description": "Bank deposits with fixed and guaranteed interest rates in RON, EUR, and USD",
+            "benefits": ["Competitive interest rates (5.70% for 3-month RON, 5.20% for 12-month RON)", "Minimum deposit: 500 RON, 200 EUR/USD", "Deposit periods: 1-12 months", "Additional 0.30% bonus interest for salary clients", "Guaranteed by Deposit Guarantee Fund"],
+            "target_audience": "Clients who want to save without risk and seek guaranteed returns"
         },
-        "cont_economii": {
-            "name": "Cont de Economii",
-            "description": "Cont flexibil de economii cu acces rapid la fonduri",
-            "benefits": ["Dobândă variabilă", "Retragere fără penalizări", "Fără comision administrare"],
-            "target_audience": "Clienți care vor flexibilitate și acces rapid la economii"
+        
+        "savings_account": {
+            "name": "Super Acces Plus Savings Account",
+            "description": "Flexible savings account with tiered interest rates and unlimited access to funds",
+            "benefits": ["Variable interest rates tiered by balance (2-3% RON, 0.50% EUR, 0.30% USD)", "Minimum opening amount: 1 RON/EUR/USD", "Unlimited withdrawals without penalties", "Zero administration fees", "Daily interest calculation, monthly capitalization", "SavingBox automatic savings feature (1%, 3%, 5%, 10% of debit card payments)"],
+            "target_audience": "Clients who want flexibility and immediate access to their savings"
         },
-        "card_debit": {
-            "name": "Card de Debit Premium",
-            "description": "Card de debit cu beneficii extinse și asigurări incluse",
-            "benefits": ["Cashback 2%", "Asigurare călătorii", "Acces lounge aeroporturi"],
-            "target_audience": "Clienți cu venituri mari care călătoresc frecvent"
+        
+        "debit_card_premium": {
+            "name": "Visa Debit Platinum Card",
+            "description": "Premium debit card with extended benefits and included insurance",
+            "benefits": ["Zero commission for merchant payments", "LoungeKey airport lounge access", "Travel insurance included", "Exclusive discounts and offers", "BlackCab service", "Premium roadside assistance", "Concierge service"],
+            "target_audience": "High-income clients who travel frequently and seek premium banking services"
         },
-        "credit_imobiliar": {
-            "name": "Credit Imobiliar",
-            "description": "Împrumut pentru achiziție sau refinanțare locuință",
-            "benefits": ["Dobândă competitivă", "Perioadă până la 30 ani", "Posibilitate avans 0%"],
-            "target_audience": "Familii tinere sau clienți care doresc să cumpere casă"
+        
+        "mortgage_credit": {
+            "name": "Casa Ta Mortgage Credit",
+            "description": "Real estate loan for purchasing, constructing or refinancing a home",
+            "benefits": ["Amount: 5,000-300,000 EUR equivalent", "Period: 3-30 years", "Minimum down payment: 15%", "Fixed interest for 3 or 5 years starting from 5.10%, then variable (margin 2.40% + IRCC)", "Refinancing option with bonus of 2,000 RON", "Noua Casa government program available (5-15% down payment, 2% interest)"],
+            "target_audience": "Young families or clients who want to purchase a home"
         },
-        "credit_nevoi_personale": {
-            "name": "Credit Nevoi Personale",
-            "description": "Împrumut rapid pentru orice scop",
-            "benefits": ["Aprobare rapidă", "Fără garanții până la 50.000 RON", "Rată flexibilă"],
-            "target_audience": "Clienți cu nevoi financiare pe termen scurt/mediu"
+        
+        "personal_loan": {
+            "name": "Flexicredit Personal Loan",
+            "description": "Fast unsecured loan for any purpose",
+            "benefits": ["Amount: 500-50,000 EUR equivalent in RON", "Period: 18 months to 5 years", "No collateral required", "Interest from 5.75%", "APR between 8.11%-36.66%", "Fast approval", "Only ID and ANAF consent required", "Minimum net income: 510 EUR"],
+            "target_audience": "Clients with short/medium-term financial needs and regular income"
         },
-        "investitii_fonduri": {
-            "name": "Fonduri de Investiții",
-            "description": "Portofolii diversificate de investiții gestionate profesional",
-            "benefits": ["Diversificare risc", "Gestiune profesională", "Multiple strategii"],
-            "target_audience": "Clienți cu toleranță medie/ridicată la risc"
+        
+        "investment_funds": {
+            "name": "SmartInvest Investment Plans",
+            "description": "Professionally managed diversified investment portfolios through Raiffeisen Asset Management",
+            "benefits": ["Monthly automatic investment from 200 RON/50 EUR/50 USD", "Multiple fund options (bonds, mixed, equity)", "Current fees: 0.99%-2.43% depending on fund", "Zero costs for opening/closing investment plan", "100% online management via Smart Mobile", "Tax advantages (1% tax for holdings over 365 days, 3% under 365 days)", "Professional portfolio management", "Flexible contributions"],
+            "target_audience": "Clients with medium/high risk tolerance seeking long-term capital growth"
         },
-        "pensie_privata": {
-            "name": "Pensie Privată (Pilon III)",
-            "description": "Plan de economii pe termen lung pentru pensie",
-            "benefits": ["Avantaje fiscale", "Contribuții flexibile", "Randament pe termen lung"],
-            "target_audience": "Clienți angajați care plănuiesc pensionarea"
+        
+        "private_pension": {
+            "name": "Raiffeisen Acumulare Private Pension (Pillar III)",
+            "description": "Optional long-term pension savings plan with tax advantages",
+            "benefits": ["Voluntary contributions with individual accounts", "Maximum contribution: 15% of gross monthly income", "Minimum contribution: 100 RON/month (Raiffeisen Acumulare)", "Tax exemptions up to 400 EUR/year for both employee and employer contributions", "Professionally invested in various financial instruments", "Potential for better returns than public pension system", "Direct relationship between contributions and benefits"],
+            "target_audience": "Employed clients planning for retirement who want to maintain living standards after retirement"
         },
-        "cont_copii": {
-            "name": "Cont Junior",
-            "description": "Cont de economii special pentru copii",
-            "benefits": ["Dobândă bonificată", "Educație financiară", "Card pentru adolescenți"],
-            "target_audience": "Părinți care vor să economisească pentru copii"
+        
+        "junior_account": {
+            "name": "Teen Account (14-17 years)",
+            "description": "Special current account for adolescents aged 14-17 years",
+            "benefits": ["Zero fees for account and card administration", "Zero fees for Smart Mobile app", "Free cash withdrawals at any ATM in Romania", "Debit card included (VISA)", "Apple Pay and Google Pay enrollment", "Real-time notifications", "Financial bonus up to unspecified amount", "Parental supervision features", "Financial education tool"],
+            "target_audience": "Parents who want to teach financial responsibility to their teenage children (14-17 years old)"
         },
-        "asigurare_viata": {
-            "name": "Asigurare de Viață",
-            "description": "Protecție financiară pentru familie",
-            "benefits": ["Protecție financiară", "Opțiuni investiționale", "Deducere fiscală"],
-            "target_audience": "Clienți cu familie care doresc protecție financiară"
+        
+        "life_insurance": {
+            "name": "Life Insurance with Guaranteed Savings Component",
+            "description": "Life insurance with savings and financial protection for family",
+            "benefits": ["Financial protection in case of death or permanent disability from accident", "Guaranteed savings component with fixed interest rate", "Junior Protect Plus: savings for children's future (education, business start)", "Senior Protect Plus: retirement comfort and financial stability", "Minimum monthly premium: 100 RON", "No medical exam required", "Simple policy issuance", "Guaranteed sum insured plus supplementary benefit at maturity", "Premium payment continues by insurer in case of covered event"],
+            "target_audience": "Clients with families who want financial protection and long-term savings combined"
         }
     }
     return products
