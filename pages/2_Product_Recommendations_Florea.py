@@ -28,6 +28,8 @@ from src.agents.user_experience_summary_agent import (
 )
 from src.agents.product_title_generation_agent import product_title_agent
 from src.agents.email_summary_agent import email_summary_agent
+from src.agents.financial_plan_agent import generate_financial_plan, format_plan_for_display
+from src.utils.db import save_financial_plan
 
 apply_button_styling()
 render_sidebar_info()
@@ -694,13 +696,88 @@ FROM_EMAIL: {from_email}
         col_generate, col_clear = st.columns(2)
         with col_generate:
             if st.button("🎯 Generează Plan Financiar Personalizat", type="primary", use_container_width=True):
-                st.success("✨ Funcția de generare a planului va fi implementată în curând!")
-                # TODO: Implement financial plan generation based on selected products
-                profile_data = st.session_state.user_profile_data
-                st.json({
-                    "selected_products": st.session_state.selected_products,
-                    "user_profile": profile_data
-                })
+                if not AWS_BEDROCK_API_KEY:
+                    st.error("⚠️ Configurați cheia Bedrock în .env (AWS_BEARER_TOKEN_BEDROCK) pentru a genera planul financiar.")
+                else:
+                    # Prepare data for financial plan generation
+                    profile_data = st.session_state.get("user_profile_data", {})
+                    
+                    if not profile_data:
+                        st.error("⚠️ Profil utilizator lipsă. Vă rugăm să completați profilul mai sus.")
+                    else:
+                        with st.spinner("🤖 Generăm planul dumneavoastră financiar personalizat... (poate dura 10-20 secunde)"):
+                            try:
+                                # Build selected products data with full details
+                                selected_products_data = []
+                                catalog = _get_products_catalog_dict()
+                                ranked_products = st.session_state.get("ranked_products", [])
+                                
+                                for product_id in st.session_state.selected_products:
+                                    # Get product from catalog
+                                    if product_id in catalog:
+                                        product_info = catalog[product_id].copy()
+                                        
+                                        # Try to find personalized summary from ranked products
+                                        personalized_summary = None
+                                        for pid, prod in ranked_products:
+                                            if pid == product_id:
+                                                personalized_summary = prod.get("personalized_summary")
+                                                break
+                                        
+                                        # Build complete product data
+                                        product_data = {
+                                            "product_id": product_id,
+                                            "name": product_info.get("name", ""),
+                                            "name_ro": product_info.get("name_ro", product_info.get("name", "")),
+                                            "description": product_info.get("description", ""),
+                                            "benefits": product_info.get("benefits", []),
+                                            "personalized_summary": personalized_summary or product_info.get("description", ""),
+                                        }
+                                        selected_products_data.append(product_data)
+                                
+                                # Generate financial plan
+                                plan_text = generate_financial_plan(profile_data, selected_products_data)
+                                formatted_plan = format_plan_for_display(plan_text)
+                                
+                                # Store in session state for download
+                                st.session_state["generated_financial_plan"] = formatted_plan
+                                
+                                # Save to database if user is logged in
+                                user_email = st.session_state.get("auth", {}).get("email")
+                                if user_email:
+                                    save_success = save_financial_plan(user_email, formatted_plan)
+                                    if save_success:
+                                        st.success("✅ **Plan financiar generat și salvat în baza de date!**")
+                                    else:
+                                        st.warning("⚠️ **Plan generat cu succes, dar salvarea în baza de date a eșuat.**")
+                                else:
+                                    st.success("✅ **Plan financiar generat cu succes!**")
+                                    st.info("ℹ️ **Autentificați-vă pentru a salva planul în contul dumneavoastră.**")
+                                
+                                # Display plan in expandable section
+                                with st.expander("📄 Vizualizare Plan Financiar Complet", expanded=True):
+                                    st.markdown(formatted_plan)
+                                
+                                # Download button
+                                st.download_button(
+                                    label="📥 Descarcă Planul Financiar (Markdown)",
+                                    data=formatted_plan,
+                                    file_name=f"plan_financiar_{profile_data.get('first_name', 'client')}_{profile_data.get('last_name', '')}.md",
+                                    mime="text/markdown",
+                                    use_container_width=True,
+                                    type="secondary"
+                                )
+                                
+                            except ValueError as ve:
+                                st.error(f"❌ **Eroare de validare:** {str(ve)}")
+                            except RuntimeError as re:
+                                st.error(f"❌ **Eroare la generarea planului:** {str(re)}\n\nVerificați că Bedrock API este configurat corect.")
+                            except Exception as e:
+                                st.error(f"❌ **Eroare neașteptată:** {str(e)}")
+                                import traceback
+                                with st.expander("🔍 Detalii tehnice"):
+                                    st.code(traceback.format_exc())
+        
         with col_clear:
             if st.button("🗑️ Șterge Selecția", type="secondary", use_container_width=True):
                 st.session_state.selected_products = []
