@@ -27,7 +27,7 @@ col_nav1, col_nav2 = st.columns(2)
 with col_nav1:
     st.page_link("pages/0_Register.py", label="Nu ai cont? Înregistrează-te →")
 with col_nav2:
-    st.page_link("pages/1_Product_Recommendations_Sabin.py", label="Recomandări produse →")
+    st.page_link("pages/2_Product_Recommendations_Florea.py", label="Recomandări produse →")
 
 st.divider()
 
@@ -45,7 +45,7 @@ with st.form("login_form", clear_on_submit=False, border=True):
             # Load profile into session for convenience
             st.session_state["user_profile"] = users[email]["profile"]
             st.success("Autentificare reușită!")
-            st.page_link("pages/1_Product_Recommendations_Sabin.py", label="Continuă la Recomandări →")
+            st.page_link("pages/2_Product_Recommendations_Florea.py", label="Continuă la Recomandări →")
         else:
             st.error("Email sau parolă invalide.")
 
