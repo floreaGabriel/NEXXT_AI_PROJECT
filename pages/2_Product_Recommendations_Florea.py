@@ -19,6 +19,7 @@ from src.components.ui_components import render_sidebar_info, apply_button_styli
 from src.agents.product_recommendation_agent import (
     UserProfile,
     rank_products_for_profile,  # Direct function for ranking
+    _get_products_catalog_dict,  # Import catalog from agent
 )
 from src.agents.user_experience_summary_agent import (
     personalization_orchestrator,
@@ -57,80 +58,9 @@ st.write(
 st.divider()
 
 
-# --- Product Catalog with Base English Summaries (from NLP stage) ---
-# In production, these would come from a database or NLP summarization service
-PRODUCT_BASE_SUMMARIES = {
-    "carduri_cumparaturi": {
-        "name": "Shopping Credit Card",
-        "name_ro": "Card de Cumpărături",
-        "description": "Card de credit special pentru cumpărături cu rate fixe și fără dobândă",
-        "base_summary": "Special credit card offering interest-free installment plans at partner merchants, with cashback rewards up to 5% and comprehensive purchase protection insurance.",
-        "benefits": ["Rate fără dobândă la parteneri", "Cashback până la 5%", "Asigurare achizitii"],
-    },
-    "depozite_termen": {
-        "name": "Fixed-Term Deposit",
-        "name_ro": "Depozit la Termen",
-        "description": "Depozit bancar cu dobândă fixă și garantată",
-        "base_summary": "Bank deposit with guaranteed fixed interest rates, offering competitive returns with full capital protection across flexible terms from 1 to 60 months.",
-        "benefits": ["Dobânzi competitive", "Sumă garantată", "Diverse perioade (1-60 luni)"],
-    },
-    "cont_economii": {
-        "name": "Savings Account",
-        "name_ro": "Cont de Economii",
-        "description": "Cont flexibil de economii cu acces rapid la fonduri",
-        "base_summary": "Flexible savings account providing variable interest rates with instant access to your funds and no withdrawal penalties or administration fees.",
-        "benefits": ["Dobândă variabilă", "Retragere fără penalizări", "Fără comision administrare"],
-    },
-    "card_debit": {
-        "name": "Premium Debit Card",
-        "name_ro": "Card de Debit Premium",
-        "description": "Card de debit cu beneficii extinse și asigurări incluse",
-        "base_summary": "Premium debit card featuring 2% cashback on purchases, comprehensive travel insurance coverage, and exclusive access to airport lounges worldwide.",
-        "benefits": ["Cashback 2%", "Asigurare călătorii", "Acces lounge aeroporturi"],
-    },
-    "credit_imobiliar": {
-        "name": "Mortgage Loan",
-        "name_ro": "Credit Imobiliar",
-        "description": "Împrumut pentru achiziție sau refinanțare locuință",
-        "base_summary": "Mortgage financing for home purchase or refinancing with competitive interest rates, terms up to 30 years, and flexible down payment options including 0% advance possibilities.",
-        "benefits": ["Dobândă competitivă", "Perioadă până la 30 ani", "Posibilitate avans 0%"],
-    },
-    "credit_nevoi_personale": {
-        "name": "Personal Loan",
-        "name_ro": "Credit Nevoi Personale",
-        "description": "Împrumut rapid pentru orice scop",
-        "base_summary": "Fast-approval personal loan for any purpose, with no collateral required for amounts up to 50,000 RON and flexible repayment schedules.",
-        "benefits": ["Aprobare rapidă", "Fără garanții până la 50.000 RON", "Rată flexibilă"],
-    },
-    "investitii_fonduri": {
-        "name": "Investment Funds",
-        "name_ro": "Fonduri de Investiții",
-        "description": "Portofolii diversificate de investiții gestionate profesional",
-        "base_summary": "Professionally managed investment portfolios offering diversified risk exposure across multiple strategies to optimize long-term returns.",
-        "benefits": ["Diversificare risc", "Gestiune profesională", "Multiple strategii"],
-    },
-    "pensie_privata": {
-        "name": "Private Pension (Pillar III)",
-        "name_ro": "Pensie Privată (Pilon III)",
-        "description": "Plan de economii pe termen lung pentru pensie",
-        "base_summary": "Long-term retirement savings plan with tax advantages, flexible contribution options, and professionally managed portfolios designed for sustainable long-term growth.",
-        "benefits": ["Avantaje fiscale", "Contribuții flexibile", "Randament pe termen lung"],
-    },
-    "cont_copii": {
-        "name": "Junior Account",
-        "name_ro": "Cont Junior",
-        "description": "Cont de economii special pentru copii",
-        "base_summary": "Specialized savings account for children with enhanced interest rates, financial education resources, and optional debit card for teenagers to develop money management skills.",
-        "benefits": ["Dobândă bonificată", "Educație financiară", "Card pentru adolescenți"],
-    },
-    "asigurare_viata": {
-        "name": "Life Insurance",
-        "name_ro": "Asigurare de Viață",
-        "description": "Protecție financiară pentru familie",
-        "base_summary": "Comprehensive life insurance providing financial protection for your family with optional investment components and tax-deductible premiums.",
-        "benefits": ["Protecție financiară", "Opțiuni investiționale", "Deducere fiscală"],
-    }
-}
+st.divider()
+
+# User Profile Input Section
 
 # User Profile Input Section
 st.subheader("📋 Profilul Dumneavoastră")
@@ -173,6 +103,14 @@ with col1:
         value=bool(user_defaults.get("has_children", False)),
         help="Bifați dacă aveți copii"
     )
+    
+    education_options = ["Fără studii superioare", "Liceu", "Facultate", "Master", "Doctorat"]
+    education_level = st.selectbox(
+        "Nivel Studii",
+        education_options,
+        index=education_options.index(_get_default(education_options, user_defaults.get("education_level"), education_options[2])) if user_defaults.get("education_level") in education_options else 2,
+        help="Cel mai înalt nivel de educație finalizat"
+    )
 
 with col2:
     employment_options = ["Angajat", "Independent", "Șomer", "Pensionar", "Student"]
@@ -208,6 +146,16 @@ with col2:
 
 st.divider()
 
+# Initialize session state variables
+if 'selected_products' not in st.session_state:
+    st.session_state.selected_products = []
+if 'ranked_products' not in st.session_state:
+    st.session_state.ranked_products = None
+if 'llm_titles' not in st.session_state:
+    st.session_state.llm_titles = {}
+if 'user_profile_data' not in st.session_state:
+    st.session_state.user_profile_data = None
+
 # Get Recommendations Button
 if st.button("🔍 Obține Recomandări", type="primary", use_container_width=True):
     if not AWS_BEDROCK_API_KEY:
@@ -226,25 +174,25 @@ if st.button("🔍 Obține Recomandări", type="primary", use_container_width=Tr
                     has_children=has_children,
                     risk_tolerance=risk_tolerance.lower(),
                     financial_goals=[goal.lower() for goal in financial_goals],
+                    education_level=education_level.lower(),
                 )
                 
                 # STEP 1: Product Recommendation Agent - Rank products by relevance score
                 # Uses deterministic rule-based scoring (TODO: replace with ML model)
                 ranked_products = rank_products_for_profile(user_profile.model_dump_json())
                 
-                # STEP 2: Attach base English summaries from NLP stage
-                # In production, these would come from a separate NLP summarization service
-                products_with_base_summaries = []
+                # STEP 2: Get product catalog from agent and prepare for personalization
+                # Using product description as input (not pre-generated summary)
+                product_catalog = _get_products_catalog_dict()
+                products_with_descriptions = []
                 for product in ranked_products:
                     pid = product["product_id"]
-                    base_data = PRODUCT_BASE_SUMMARIES.get(pid, {})
+                    base_data = product_catalog.get(pid, {})
                     
-                    products_with_base_summaries.append({
+                    products_with_descriptions.append({
                         "product_id": pid,
                         "name": base_data.get("name", pid),
-                        "name_ro": base_data.get("name_ro", pid),
                         "description": base_data.get("description", ""),
-                        "base_summary": base_data.get("base_summary", "Banking product with various benefits."),
                         "benefits": base_data.get("benefits", []),
                         "score": product["score"],
                     })
@@ -256,65 +204,118 @@ if st.button("🔍 Obține Recomandări", type="primary", use_container_width=Tr
                 context = PersonalizationContext(user_profile=user_profile)
                 
                 async def run_personalization_agent():
-                    # Build detailed prompt for each product
+                    # Build hyper-personalized recommendations based on EVERY detail
                     personalization_requests = []
-                    for product in products_with_base_summaries:
-                        user_context_parts = []
-                        
-                        # Build user context description
-                        if user_profile.age is not None:
-                            if user_profile.age < 30:
-                                user_context_parts.append("young professional starting financial journey")
-                            elif user_profile.age < 45:
-                                user_context_parts.append("established professional managing responsibilities")
-                            else:
-                                user_context_parts.append("experienced individual planning long-term security")
-                        
-                        if user_profile.has_children:
-                            user_context_parts.append("parent with family responsibilities")
-                        
-                        if user_profile.risk_tolerance:
-                            rt = user_profile.risk_tolerance.lower()
-                            if "low" in rt or "scăzută" in rt or "scazuta" in rt:
-                                user_context_parts.append("preferring stable, low-risk solutions")
-                            elif "high" in rt or "ridicată" in rt or "ridicata" in rt:
-                                user_context_parts.append("comfortable with growth-oriented strategies")
-                        
-                        user_context = ", ".join(user_context_parts) if user_context_parts else "seeking financial solutions"
-                        
-                        relevance_tone = "excellent match" if product["score"] >= 0.8 else "strong fit" if product["score"] >= 0.6 else "potential option"
-                        
+                    for product in products_with_descriptions:
                         personalization_requests.append({
                             "product_id": product["product_id"],
                             "product_name": product["name"],
-                            "base_summary": product["base_summary"],
-                            "user_context": user_context,
-                            "relevance_tone": relevance_tone,
+                            "product_description": product["description"],
+                            "benefits": product["benefits"],
+                            "relevance_score": product["score"],
                         })
                     
-                    # Call LLM for personalization
-                    prompt = f"""Personalize these banking product summaries for the user profile.
+                    # Call LLM for deep personalization
+                    prompt = f"""Creează recomandări EXTREM DE PERSONALIZATE pentru fiecare produs bancar bazate pe profilul EXACT al utilizatorului.
 
-User Profile:
-- Age: {user_profile.age}
-- Income: {user_profile.annual_income} RON/year
-- Marital Status: {user_profile.marital_status}
-- Has Children: {user_profile.has_children}
-- Risk Tolerance: {user_profile.risk_tolerance}
-- Financial Goals: {', '.join(user_profile.financial_goals)}
+PROFIL UTILIZATOR COMPLET:
+- Vârstă: {user_profile.age} ani
+- Venit Anual: {user_profile.annual_income:,.0f} RON/an ({user_profile.annual_income/12:,.0f} RON/lună)
+- Status Angajare: {user_profile.employment_status}
+- Nivel Studii: {user_profile.education_level}
+- Stare Civilă: {user_profile.marital_status}
+- Are Copii: {'Da' if user_profile.has_children else 'Nu'}
+- Toleranță Risc: {user_profile.risk_tolerance}
+- Obiective Financiare: {', '.join(user_profile.financial_goals)}
 
-Products to personalize:
-{json.dumps(personalization_requests, indent=2)}
+PRODUSE:
+{json.dumps(personalization_requests, indent=2, ensure_ascii=False)}
 
-CRITICAL INSTRUCTIONS:
-1. For each product, create a personalized English summary (2-3 sentences max)
-2. PRESERVE all facts from base_summary - do NOT add features or benefits
-3. ADJUST language and tone to resonate with user_context
-4. Use relevance_tone to modulate enthusiasm
-5. Connect product features to user's life situation naturally
-6. Maintain professional banking language
+INSTRUCȚIUNI CRITICE PENTRU PERSONALIZARE AVANSATĂ:
 
-Return ONLY a JSON array with this exact structure:
+0. **ADAPTEAZĂ COMPLEXITATEA LIMBAJULUI LA ALFABETIZAREA FINANCIARĂ**:
+   
+   Estimare nivel cunoștințe financiare bazat pe Vârstă + Studii:
+   
+   **NIVEL SCĂZUT** (limbaj simplu, fără termeni tehnici):
+   - Tânăr (<30 ani) + Fără studii superioare/Liceu → explică termeni de bază
+   - Vârstnic (60+ ani) + Fără studii superioare/Liceu → limbaj foarte accesibil
+   - Student indiferent de vârstă → educațional, explică concepte
+   
+   Exemple limbaj simplu:
+   - ✅ "bani pe care îi pui deoparte lunar" 
+   - ❌ "alocări periodice de capital"
+   - ✅ "dobânda = banii în plus pe care îi primești de la bancă"
+   - ❌ "rentabilitatea investiției"
+   - ✅ "împarte riscul între mai multe locuri"
+   - ❌ "diversificare de portofoliu"
+   
+   **NIVEL MEDIU** (termeni bancari comuni + explicații scurte):
+   - 30-50 ani + Facultate/Master
+   - 50+ ani + Facultate/Master
+   
+   Exemple limbaj mediu:
+   - ✅ "diversificare (împărțirea investițiilor în mai multe domenii)"
+   - ✅ "dobândă fixă garantată"
+   - ✅ "capitalizare lunară a dobânzii"
+   
+   **NIVEL AVANSAT** (termeni tehnici fără explicații):
+   - Orice vârstă + Master/Doctorat + venit mare (>100k RON/an)
+   - 35-55 ani + Facultate + venit mare + "investiții" în obiective
+   
+   Exemple limbaj avansat:
+   - ✅ "randament anual efectiv"
+   - ✅ "optimizare fiscală prin deduceri"
+   - ✅ "portofoliu diversificat cu alocare strategică"
+   - ✅ "DAE (Dobândă Anuală Efectivă)"
+
+INSTRUCȚIUNI CRITICE PENTRU PERSONALIZARE AVANSATĂ:
+
+1. **SPECIFICĂ SUME CONCRETE ÎN RON** adaptate la venitul și situația utilizatorului:
+   - Pentru investiții: recomandă % din venit sau sume lunare concrete
+   - Pentru credite: calculează capacitate de plată (max 40% din venit)
+   - Pentru economii: sugerează praguri realiste (3-6 luni cheltuieli = rezervă urgență)
+
+2. **ADAPTEAZĂ LA FIECARE DETALIU**:
+   - Vârstă 20 ani angajat → "la început de carieră, construiește fundația financiară"
+   - Vârstă 20 ani student → "concentrează-te pe educație financiară și economii mici"
+   - Vârstă 20 ani șomer dar venit anual → "probabil sprijin familial, învață să gestionezi bani"
+   - Vârstă 35 ani cu copii → "responsabilități familiale, prioritate securitate"
+   - Vârstă 50 ani fără copii → "maximizează investiții pentru pensionare"
+
+3. **TON ȘI LIMBAJ ADAPTAT**:
+   - Tânăr (18-25): ton prietenos, casual, educativ, "Ai", "începi", "construiești"
+   - Mediu (26-45): ton profesionist, practic, "Gestionezi", "optimizezi", "planifici"
+   - Senior (46+): ton respectuos, orientat securitate, "Asigurați", "protejați", "mențineti"
+
+4. **RECOMANDĂRI SPECIFICE BAZATE PE CONTEXT**:
+
+   Exemple concrete:
+   
+   - **Plan investiții pentru 20 ani angajat, 3000 RON/lună, risc mediu:**
+     "La 20 de ani și cu un venit stabil de 3.000 RON/lună, poți începe cu investiții lunare de 300-500 RON (10-15% din venit) în fonduri mixte. Orizontul lung de timp (40 ani până la pensie) îți permite să beneficiezi de puterea dobânzii compuse."
+   
+   - **Plan investiții pentru 20 ani șomer, 20.000 RON/an venit (probabil părinți):**
+     "Cu un venit anual de 20.000 RON (probabil sprijin familial), focusează-te mai întâi pe educație financiară și economii de urgență (minim 10.000 RON). Apoi, începe investiții mici de 100-200 RON/lună pentru a învăța despre piață fără riscuri mari."
+   
+   - **Credit ipotecar pentru 35 ani angajat, 8000 RON/lună, căsătorit cu copii:**
+     "Cu venitul familiei de 8.000 RON/lună și responsabilități către copii, poți accesa un credit de până la 150.000-200.000 EUR (rată max 3.200 RON/lună = 40% din venit). Prioritizează avansul minim 15% pentru dobândă mai bună."
+   
+   - **Cont economii pentru 22 ani student, 15.000 RON/an:**
+     "Ca student cu venituri limitate de 1.250 RON/lună, creează o rezervă de urgență de 5.000-7.500 RON (4-6 luni). Acest cont cu retrageri gratuite este perfect pentru accesibilitate când ai nevoie rapid de bani pentru taxe sau emergențe."
+
+5. **PĂSTREAZĂ ACURATEȚEA**: 
+   - NU inventa beneficii sau termeni care nu sunt în description
+   - NU schimba informații despre dobânzi, perioade, comisioane
+   - Folosește description ca sursă de adevăr pentru caracteristicile produsului
+
+6. **FORMAT OUTPUT**: 
+   - Maxim 3-4 propoziții
+   - Include recomandare concretă (sumă RON sau strategie)
+   - Explică DE CE această sumă/strategie se potrivește profilului
+   - Limbaj accesibil dar profesionist
+
+Returnează DOAR un array JSON:
 [
   {{"product_id": "...", "personalized_summary": "..."}},
   ...
@@ -345,29 +346,29 @@ Return ONLY a JSON array with this exact structure:
                         # Merge personalized summaries back into products
                         summary_map = {item["product_id"]: item["personalized_summary"] for item in personalized_summaries}
                         
-                        for product in products_with_base_summaries:
+                        for product in products_with_descriptions:
                             product["personalized_summary"] = summary_map.get(
                                 product["product_id"],
-                                product["base_summary"]  # Fallback to base if LLM didn't personalize
+                                f"{product['description']}"  # Fallback to description if LLM didn't personalize
                             )
                     else:
-                        st.warning("⚠️ LLM didn't return valid JSON. Using base summaries.")
-                        for product in products_with_base_summaries:
-                            product["personalized_summary"] = product["base_summary"]
+                        st.warning("⚠️ LLM nu a returnat JSON valid. Folosim descrierile standard.")
+                        for product in products_with_descriptions:
+                            product["personalized_summary"] = product["description"]
                             
                 except Exception as e:
-                    st.warning(f"⚠️ Error parsing LLM response: {e}. Using base summaries.")
-                    for product in products_with_base_summaries:
-                        product["personalized_summary"] = product["base_summary"]
+                    st.warning(f"⚠️ Eroare parsare răspuns LLM: {e}. Folosim descrierile standard.")
+                    for product in products_with_descriptions:
+                        product["personalized_summary"] = product["description"]
                 
-                enriched_products = products_with_base_summaries
+                enriched_products = products_with_descriptions
 
                 # STEP 3.5: Generate personalized Romanian titles (no emojis) using Product Title Agent
                 # Build payload from enriched products
                 products_payload = [
                     {
                         "product_id": p["product_id"],
-                        "name": p.get("name_ro") or p.get("name") or p["product_id"],
+                        "name": p.get("name") or p["product_id"],
                         "description": p.get("description", ""),
                         "benefits": p.get("benefits", []),
                     }
@@ -416,16 +417,16 @@ Return ONLY a JSON array with this exact structure:
 
                 # Prepare UI data: add icons and format for display
                 ICONS = {
-                    "carduri_cumparaturi": "💳",
+                    "card_cumparaturi_rate": "💳",
                     "depozite_termen": "🏦",
-                    "cont_economii": "💰",
-                    "card_debit": "🪪",
-                    "credit_imobiliar": "🏠",
+                    "cont_economii_super_acces": "💰",
+                    "card_debit_platinum": "🪪",
+                    "credit_ipotecar_casa_ta": "🏠",
                     "credit_nevoi_personale": "🧾",
-                    "investitii_fonduri": "📈",
-                    "pensie_privata": "🎯",
-                    "cont_copii": "🧒",
-                    "asigurare_viata": "🛡️",
+                    "fonduri_investitii_smartinvest": "📈",
+                    "pensie_privata_pilon3": "🎯",
+                    "cont_junior_adolescenti": "🧒",
+                    "asigurare_viata_economii": "🛡️",
                 }
 
                 # Format for UI
@@ -438,8 +439,7 @@ Return ONLY a JSON array with this exact structure:
                         (
                             pid,
                             {
-                                "name_en": enriched_product.get("name", pid),
-                                "name_ro": enriched_product.get("name_ro", pid),
+                                "name": enriched_product.get("name", pid),
                                 "icon": icon,
                                 "description": enriched_product.get("description", ""),
                                 "benefits": enriched_product.get("benefits", []),
@@ -453,71 +453,120 @@ Return ONLY a JSON array with this exact structure:
                 # Already sorted by Product Recommendation Agent (no need to re-sort)
                 ranked_products = products_for_ui
                 
+                # Store in session state to persist across reruns
+                st.session_state.ranked_products = ranked_products
+                st.session_state.llm_titles = llm_titles
+                st.session_state.user_profile_data = {
+                    "age": age,
+                    "annual_income": annual_income,
+                    "marital_status": marital_status
+                }
+                
                 # Display results
                 st.success("✅ Recomandări generate cu succes!")
                 
-                st.divider()
-                st.subheader("📊 Produsele Recomandate pentru Dumneavoastră")
-                
-                # Display match score
-                st.info(f"📈 Bazat pe profilul dumneavoastră: {age} ani, venit anual {annual_income:,.0f} RON, {marital_status.lower()}")
-
-                # Display products in ranked order
-                for idx, (product_id, product) in enumerate(ranked_products, 1):
-                    with st.container(border=True):
-                        # Product header
-                        col_icon, col_title = st.columns([1, 11])
-                        with col_icon:
-                            st.markdown(f"## {product['icon']}")
-                        with col_title:
-                            # Prefer personalized Romanian title when available
-                            display_name = llm_titles.get(product_id, product['name_ro'])
-                            st.markdown(f"### {idx}. {display_name}")
-                            st.caption(f"_{product['name_en']}_")
-                            # Match percentage
-                            match_percent = int(product['score'] * 100)
-                            st.progress(product['score'], text=f"Potrivire: {match_percent}%")
-                        
-
-                        # Romanian product description
-                        st.write(product['description'])
-                        
-                        # Personalized English summary (AI-generated based on user profile)
-                        if product.get("personalized_summary"):
-                            st.markdown("**💡 Personalized for You:**")
-                            st.info(product["personalized_summary"])
-                            
-                            # Show base summary in expander for comparison
-                            with st.expander("📄 View base product summary"):
-                                st.write(product.get("base_summary", ""))
-
-                        # Benefits (Romanian)
-                        st.markdown("**Beneficii principale:**")
-                        for benefit in product['benefits']:
-                            st.markdown(f"- ✓ {benefit}")
-                        
-                        # CTA
-                        col_learn, col_apply = st.columns(2)
-                        with col_learn:
-                            st.button(
-                                f"📖 Detalii {product['name_ro']}", 
-                                key=f"learn_{product_id}",
-                                use_container_width=True
-                            )
-                        with col_apply:
-                            st.button(
-                                f"✅ Aplică Acum", 
-                                key=f"apply_{product_id}",
-                                type="primary",
-                                use_container_width=True
-                            )
-                        
-                        # Personalized note for top recommendation
-                        if idx == 1:
-                            st.success("⭐ **Recomandarea Noastră Principală** - Acest produs se potrivește cel mai bine profilului dumneavoastră!")
-                
             except Exception as e:
                 st.error(f"A apărut o eroare: {str(e)}")
+
+# Display products (outside the button block so they persist)
+if st.session_state.ranked_products is not None:
+    st.divider()
+    st.subheader("📊 Produsele Recomandate pentru Dumneavoastră")
+    
+    # Display match score
+    profile_data = st.session_state.user_profile_data
+    st.info(f"📈 Bazat pe profilul dumneavoastră: {profile_data['age']} ani, venit anual {profile_data['annual_income']:,.0f} RON, {profile_data['marital_status'].lower()}")
+    
+    ranked_products = st.session_state.ranked_products
+    llm_titles = st.session_state.llm_titles
+
+    # Display products in ranked order
+    for idx, (product_id, product) in enumerate(ranked_products, 1):
+        with st.container(border=True):
+            # Product header with selection button
+            col_icon, col_title, col_select = st.columns([1, 9, 2])
+            with col_icon:
+                st.markdown(f"## {product['icon']}")
+            with col_title:
+                # Prefer personalized Romanian title when available
+                display_name = llm_titles.get(product_id, product['name'])
+                st.markdown(f"### {idx}. {display_name}")
+                # Match percentage
+                match_percent = int(product['score'] * 100)
+                st.progress(product['score'], text=f"Potrivire: {match_percent}%")
+            with col_select:
+                # Check if product is already selected
+                is_selected = product_id in st.session_state.selected_products
+                
+                # Selection button
+                if is_selected:
+                    if st.button("✅ Selectat", key=f"select_{product_id}", type="secondary", use_container_width=True):
+                        st.session_state.selected_products.remove(product_id)
+                        st.rerun()
+                else:
+                    if st.button("➕ Selectează", key=f"select_{product_id}", type="primary", use_container_width=True):
+                        st.session_state.selected_products.append(product_id)
+                        st.rerun()
+            
+
+            # Personalized Romanian recommendation (AI-generated based on user profile)
+            if product.get("personalized_summary"):
+                st.markdown("**💡 Recomandare Personalizată:**")
+                st.info(product["personalized_summary"])
+            
+            # Personalized note for top recommendation
+            if idx == 1:
+                st.success("⭐ **Recomandarea Noastră Principală** - Acest produs se potrivește cel mai bine profilului dumneavoastră!")
+    
+    # Display selected products summary
+    if st.session_state.selected_products:
+        st.divider()
+        st.subheader("📋 Produse Selectate pentru Planul Personalizat")
+        
+        # Get catalog for product details
+        catalog = _get_products_catalog_dict()
+        
+        # Icon mapping
+        ICONS = {
+            "card_cumparaturi_rate": "💳",
+            "depozite_termen": "🏦",
+            "cont_economii_super_acces": "💰",
+            "card_debit_platinum": "🪪",
+            "credit_ipotecar_casa_ta": "🏠",
+            "credit_nevoi_personale": "🧾",
+            "fonduri_investitii_smartinvest": "📈",
+            "pensie_privata_pilon3": "🎯",
+            "cont_junior_adolescenti": "🧒",
+            "asigurare_viata_economii": "🛡️",
+        }
+        
+        # Display selected products
+        selected_count = len(st.session_state.selected_products)
+        st.info(f"**{selected_count} {'produs selectat' if selected_count == 1 else 'produse selectate'}** pentru planul dumneavoastră financiar personalizat")
+        
+        cols = st.columns(min(selected_count, 3))
+        for i, product_id in enumerate(st.session_state.selected_products):
+            with cols[i % 3]:
+                if product_id in catalog:
+                    prod = catalog[product_id]
+                    icon = ICONS.get(product_id, "🏦")
+                    st.markdown(f"{icon} **{prod['name']}**")
+        
+        # Action buttons
+        col_generate, col_clear = st.columns(2)
+        with col_generate:
+            if st.button("🎯 Generează Plan Financiar Personalizat", type="primary", use_container_width=True):
+                st.success("✨ Funcția de generare a planului va fi implementată în curând!")
+                # TODO: Implement financial plan generation based on selected products
+                profile_data = st.session_state.user_profile_data
+                st.json({
+                    "selected_products": st.session_state.selected_products,
+                    "user_profile": profile_data
+                })
+        with col_clear:
+            if st.button("🗑️ Șterge Selecția", type="secondary", use_container_width=True):
+                st.session_state.selected_products = []
+                st.rerun()
 
 # Information sidebar
 with st.sidebar:
