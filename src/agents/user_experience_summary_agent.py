@@ -1,18 +1,21 @@
 """User Experience Summary Personalization Agent
 
-Takes pre-generated English product summaries and personalizes them for individual user profiles.
-This agent is part of a three-stage pipeline:
-1. Bank product description → NLP summarization (reduces long descriptions)
-2. NLP-generated summary → THIS AGENT → Personalized summary for user profile
-3. Display personalized content to create bank-user connection
+Creates hyper-personalized banking product recommendations based on detailed user profiles.
+This agent focuses on DEEP PERSONALIZATION with concrete recommendations.
+
+Flow:
+1. Bank product description (official Raiffeisen info)
+2. THIS AGENT → Hyper-personalized recommendation with specific RON amounts, strategies, timeframes
+3. Display to user with actionable advice
 
 Design principles:
-- Receives English summaries as input, returns personalized English summaries
-- NEVER hallucinates or adds information not in original summary
-- NEVER removes key product information or benefits
-- Focuses on reframing existing content to resonate with specific user characteristics
-- Creates emotional connection between bank products and user's life situation
-- Maintains accuracy and relevance to banking context
+- Receives Romanian product descriptions as input
+- Generates CONCRETE recommendations: specific RON amounts, percentages, timeframes
+- Adapts to EVERY detail: age, income, employment, family status, risk tolerance, goals
+- Small changes in profile = different recommendations (20yo employed vs 20yo student)
+- NEVER hallucinates product features (uses description as source of truth)
+- Creates deep emotional connection through relatable, actionable advice
+- Maintains banking accuracy while being highly accessible
 
 The agent is designed exclusively for `pages/2_Product_Recommendations_Florea.py`.
 """
@@ -166,110 +169,167 @@ def personalize_products_batch(
 # --- FunctionTool for Agent SDK ------------------------------------------------------------
 
 @function_tool
-def personalize_product_summary(
-    base_summary: Annotated[str, "Pre-generated English summary from NLP stage"],
-    product_name: Annotated[str, "Name of the banking product"],
-    user_context: Annotated[str, "User's life situation and financial profile description"],
-    relevance_tone: Annotated[str, "Relevance indicator: 'excellent match', 'strong fit', or 'potential option'"],
+def create_hyper_personalized_recommendation(
+    product_description: Annotated[str, "Descrierea oficială a produsului bancar Raiffeisen"],
+    product_name: Annotated[str, "Numele produsului bancar"],
+    benefits: Annotated[list[str], "Lista de beneficii ale produsului"],
+    user_age: Annotated[int, "Vârsta utilizatorului"],
+    user_income: Annotated[float, "Venitul anual în RON"],
+    employment_status: Annotated[str, "Status angajare: angajat, student, șomer, pensionar, independent"],
+    has_children: Annotated[bool, "Are copii sau nu"],
+    risk_tolerance: Annotated[str, "Toleranța la risc: scăzută, medie, ridicată"],
+    financial_goals: Annotated[list[str], "Lista obiectivelor financiare"],
+    relevance_score: Annotated[float, "Scor de relevanță 0-1"],
 ) -> str:
-    """Personalize a banking product summary for a specific user profile.
+    """Creează o recomandare EXTREM DE PERSONALIZATĂ cu sume concrete RON și sfaturi acționabile.
     
-    CRITICAL INSTRUCTIONS FOR LLM:
-    - You MUST preserve ALL factual information from the base_summary
-    - DO NOT add features, benefits, or details not mentioned in base_summary
-    - DO NOT remove any key product information or banking terms
-    - Your ONLY job is to adjust language and tone to resonate with user_context
-    - Keep the summary concise (2-3 sentences maximum)
-    - Maintain professional banking language while being relatable
-    - Use relevance_tone to adjust enthusiasm level
-    - Connect product features to user's life situation naturally
-    - Stay accurate to banking regulations and product reality
+    INSTRUCȚIUNI CRITICE PENTRU PERSONALIZARE AVANSATĂ:
     
-    Example transformation:
-    Base: "Savings account with flexible withdrawals and competitive interest rates."
-    User context: "young professional starting financial journey, preferring low-risk"
-    Result: "This savings account offers you a secure way to build your financial foundation 
-    with flexible access to your money and competitive interest rates—ideal for starting your 
-    savings journey without taking unnecessary risks."
+    1. **CALCULEAZĂ ȘI RECOMANDĂ SUME CONCRETE ÎN RON**:
+       - Pentru investiții: calculează 5-15% din venit lunar (user_income/12)
+       - Pentru credite: max 40% din venit pentru rată lunară
+       - Pentru economii: 3-6 luni de cheltuieli (estimează 60-70% din venit)
+       - Pentru pensii private: 5-10% din venit lunar
+       
+       Exemple concrete:
+       - Venit 36.000 RON/an (3.000/lună) → investiții recomandate: 300-450 RON/lună
+       - Venit 72.000 RON/an (6.000/lună) → rată credit max: 2.400 RON/lună
+       - Venit 24.000 RON/an (2.000/lună) → economii urgență: 8.000-12.000 RON
+    
+    2. **ADAPTEAZĂ LA FIECARE COMBINAȚIE DE FACTORI**:
+       
+       Vârstă + Angajare:
+       - 20 ani + angajat → "la început de carieră, construiește fundații"
+       - 20 ani + student → "învață gestiune bani, economii mici"
+       - 20 ani + șomer cu venit → "probabil sprijin părinți, prioritate educație financiară"
+       - 30 ani + angajat + copii → "stabilitate pentru familie, balans risc-securitate"
+       - 50 ani + angajat → "maximizează acumulări pensie, risc moderat"
+       
+       Venit + Status:
+       - Venit mic (<30k/an) + tânăr → economii mici regulate, educație
+       - Venit mediu (30-80k/an) + matur → diversificare, investiții medii
+       - Venit mare (>80k/an) → produse premium, optimizare fiscală
+    
+    3. **TON ADAPTAT LA VÂRSTĂ**:
+       - 18-25 ani: prietenos, educativ, "Ai", "începi", "Îți construiești"
+       - 26-40 ani: profesionist, "Gestionezi", "Optimizezi", "Planifici"
+       - 41-60 ani: respectuos, "Asigurați", "Consolidați", "Protejați"
+       - 60+ ani: precaut, securitate, "Păstrați", "Siguranța", "Stabilitatea"
+    
+    4. **EXEMPLE CONCRETE DE RECOMANDĂRI**:
+       
+       Investiții tânăr angajat:
+       "La {user_age} ani cu venitul de {user_income/12:.0f} RON/lună, începe cu investiții 
+       lunare de {(user_income/12)*0.10:.0f}-{(user_income/12)*0.15:.0f} RON în fonduri mixte. 
+       Orizontul de {65-user_age} ani până la pensie îți permite să beneficiezi maxim de 
+       dobânda compusă."
+       
+       Credit ipotecar familie:
+       "Cu venitul familiei de {user_income/12:.0f} RON/lună și copii, poți accesa credit 
+       de până la {(user_income/12)*0.40*12*25:.0f} EUR (rată max {(user_income/12)*0.40:.0f} 
+       RON/lună). Prioritizează avans 15% pentru dobândă mai bună."
+       
+       Economii student:
+       "Cu venit de {user_income/12:.0f} RON/lună ca student, creează rezervă urgență de 
+       {(user_income/12)*4:.0f}-{(user_income/12)*6:.0f} RON. Perfect pentru taxe și emergențe."
+    
+    5. **FOLOSEȘTE DESCRIPTION CA SURSĂ DE ADEVĂR**:
+       - PĂSTREAZĂ toate informațiile tehnice din product_description
+       - NU inventa beneficii, dobânzi, perioade care nu sunt menționate
+       - Citează cifre exacte din description (dobânzi, sume minime, perioade)
+    
+    6. **FORMAT**:
+       - 3-4 propoziții maxim
+       - Propoziție 1: Recomandare concretă cu sumă RON
+       - Propoziție 2: De ce această sumă se potrivește profilului
+       - Propoziție 3: Beneficiu specific din description adaptat la situație
+       - (Opțional) Propoziție 4: Pas următor acționabil
     
     Args:
-        base_summary: Original NLP-generated summary (source of truth)
-        product_name: Product name for context
-        user_context: User's profile characteristics
-        relevance_tone: Match quality indicator
+        product_description: Descrierea oficială (sursă de adevăr pentru caracteristici)
+        product_name: Nume produs
+        benefits: Lista beneficii oficiale
+        user_age, user_income, employment_status, etc: Detalii profil
+        relevance_score: Cât de relevant e produsul (0-1)
     
     Returns:
-        Personalized English summary (same facts, personalized framing)
+        Recomandare hyper-personalizată în română cu sume concrete RON și sfaturi acționabile
     """
-    # This tool will be called by the LLM agent
-    # The LLM will use the instructions above to generate the personalized summary
-    return f"Personalizing {product_name} for user with context: {user_context} (match: {relevance_tone})"
+    # Acest tool va fi apelat de agentul LLM
+    monthly_income = user_income / 12
+    return f"Personalizare avansată {product_name} pentru {user_age} ani, {monthly_income:.0f} RON/lună, {employment_status}"
 
 
 # --- Specialized Personalization Agent ------------------------------------------------------
 
 personalization_specialist = Agent[PersonalizationContext](
-    name="Summary Personalization Specialist",
+    name="Hyper-Personalization Specialist",
     instructions=(
-        "You are a banking content personalization expert. Your ONLY responsibility is to "
-        "take pre-generated English product summaries and adapt them for specific user profiles.\n\n"
+        "Ești expert în crearea de recomandări bancare EXTREM DE PERSONALIZATE cu sfaturi concrete.\n\n"
         
-        "CRITICAL RULES - YOU MUST FOLLOW THESE EXACTLY:\n"
-        "1. NEVER add information not present in the base_summary\n"
-        "2. NEVER remove key product features or benefits\n"
-        "3. NEVER hallucinate features, rates, or terms\n"
-        "4. NEVER change factual banking information\n"
-        "5. PRESERVE all product capabilities and limitations mentioned\n\n"
+        "REGULI CRITICE:\n"
+        "1. CALCULEAZĂ sume concrete în RON adaptate la venitul și situația utilizatorului\n"
+        "2. ADAPTEAZĂ tonul și recomandările la FIECARE detaliu: vârstă, angajare, familie, risc, obiective\n"
+        "3. NU inventa caracteristici care nu sunt în product_description\n"
+        "4. PĂSTREAZĂ acuratețea informațiilor bancare din description\n"
+        "5. Fii SPECIFIC: nu spune 'puțin', ci '300 RON/lună'; nu 'peste timp', ci '30 de ani'\n\n"
         
-        "YOUR TASK:\n"
-        "- Adjust language tone to match user's life stage and situation\n"
-        "- Connect product features to user's specific needs naturally\n"
-        "- Use relevance_tone to modulate enthusiasm (excellent match = warmer tone)\n"
-        "- Keep summaries concise: 2-3 sentences maximum\n"
-        "- Maintain professional banking language while being relatable\n"
-        "- Create emotional connection between product and user's goals\n\n"
+        "SARCINA TA:\n"
+        "- Calculează sume RON: investiții 5-15% din venit lunar, credite max 40% din venit pentru rată\n"
+        "- Adaptează la combinații: 20ani+angajat ≠ 20ani+student ≠ 20ani+șomer\n"
+        "- Ton pe vârstă: tânăr=prietenos('Ai','începi'), matur=profesionist('Gestionezi'), senior=respectuos('Asigurați')\n"
+        "- 3-4 propoziții: recomandare cu sumă → de ce se potrivește → beneficiu relevant → pas următor\n"
+        "- Conectează produsul cu obiectivele: 'educație copii' + fond investiții → 'construiește fond educație'\n\n"
         
-        "EXAMPLES OF GOOD PERSONALIZATION:\n"
-        "Base: 'Fixed-term deposit with guaranteed returns.'\n"
-        "User: 'young professional, low-risk preference'\n"
-        "Good: 'This fixed-term deposit gives you guaranteed returns—a secure way to grow your "
-        "savings without market volatility as you build your financial foundation.'\n\n"
+        "EXEMPLE BUNE:\n"
+        "Investiții, 22 ani angajat, 3.000 RON/lună:\n"
+        "'La 22 de ani cu venit stabil de 3.000 RON/lună, începe cu investiții lunare de 300-450 RON "
+        "(10-15% din venit) în fonduri mixte. Orizontul lung de 43 de ani până la pensie îți permite "
+        "să beneficiezi maxim de dobânda compusă. Fondurile gestionate profesional balansează creșterea "
+        "cu siguranța potrivită pentru începutul carierei.'\n\n"
         
-        "Base: 'Investment fund with diversified portfolio.'\n"
-        "User: 'parent, planning for children's education'\n"
-        "Good: 'This diversified investment fund helps you build an education fund for your children "
-        "through professional portfolio management that balances growth with risk control.'\n\n"
+        "Credit ipotecar, 35 ani cu copii, 6.000 RON/lună:\n"
+        "'Cu venitul familiei de 6.000 RON/lună și responsabilități către copii, poți accesa un credit "
+        "de până la 120.000-150.000 EUR (rată max 2.400 RON/lună = 40% din venit). Perioadele flexibile "
+        "de 3-30 ani îți permit să alegi o rată confortabilă pentru bugetul familiei. Prioritizează "
+        "avansul minim 15% pentru dobândă mai bună și acces la programul Prima Casă.'\n\n"
         
-        "EXAMPLES OF BAD PERSONALIZATION (DO NOT DO THIS):\n"
-        "❌ Adding: 'This product includes insurance' (if not in base_summary)\n"
-        "❌ Removing: 'Fixed-term' constraint if mentioned in base\n"
-        "❌ Inventing: Specific rates, terms, or features not mentioned\n"
-        "❌ Being too lengthy: More than 3 sentences\n\n"
+        "Economii, 20 ani student, 1.500 RON/lună:\n"
+        "'Ca student cu venituri de 1.500 RON/lună, creează o rezervă de urgență de 6.000-9.000 RON "
+        "(4-6 luni). Retragerile nelimitate fără penalități îți dau siguranța că poți accesa rapid "
+        "banii pentru taxe sau situații neprevăzute. Începe cu depuneri mici regulate de 200-300 RON/lună.'\n\n"
         
-        "When you receive a personalization request, respond with ONLY the personalized summary. "
-        "No explanations, no metadata—just the refined English text that maintains accuracy "
-        "while resonating with the user's life situation."
+        "CE NU FACI (GREȘELI):\n"
+        "❌ Sume vagi: 'investește puțin' → CORECT: 'investește 300-400 RON/lună'\n"
+        "❌ Fără adaptare vârstă: același ton pentru 20 și 60 ani\n"
+        "❌ Inventează beneficii: 'include asigurare' când nu e în description\n"
+        "❌ Prea lung: mai mult de 4 propoziții\n\n"
+        
+        "Răspunde DOAR cu recomandarea personalizată în română, fără explicații sau metadata."
     ),
-    tools=[personalize_product_summary],
+    tools=[create_hyper_personalized_recommendation],
     model=build_default_litellm_model(),
 )
 
 
 personalization_orchestrator = Agent[PersonalizationContext](
-    name="Personalization Orchestrator",
+    name="Orchestrator Personalizare Avansată",
     instructions=(
-        "You coordinate the summary personalization process for banking products. "
-        "You receive products with base summaries and user profile information, then delegate "
-        "to the Personalization Specialist to create user-specific versions.\n\n"
+        "Coordonezi procesul de personalizare avansată pentru produsele bancare Raiffeisen.\n"
+        "Primești produse cu descrieri oficiale și profile complete de utilizatori, apoi delegi "
+        "către Hyper-Personalization Specialist pentru a crea recomandări extrem de personalizate.\n\n"
         
-        "Your workflow:\n"
-        "1. Receive list of products with base_summary fields\n"
-        "2. Extract user_context and relevance indicators\n"
-        "3. For each product, call personalize_product_summary tool\n"
-        "4. Return products with personalized_summary fields\n\n"
+        "Workflow:\n"
+        "1. Primești lista de produse cu product_description, benefits, și relevance_score\n"
+        "2. Primești profil complet: age, income, employment_status, has_children, risk_tolerance, financial_goals\n"
+        "3. Pentru fiecare produs, apelezi create_hyper_personalized_recommendation cu TOATE detaliile\n"
+        "4. Returnezi produsele cu câmpul personalized_summary completat\n\n"
         
-        "Remember: The specialist handles the creative work. You just orchestrate the flow "
-        "and ensure all products get personalized versions."
+        "Important:\n"
+        "- Specialistul face munca creativă: calculează sume RON, adaptează ton, creează recomandări concrete\n"
+        "- Tu doar orchestrezi fluxul și te asiguri că toate produsele primesc versiuni personalizate\n"
+        "- Transmite TOATE detaliile profilului către specialist pentru personalizare maximă\n"
+        "- Fiecare produs trebuie să aibă o recomandare unică adaptată la utilizator"
     ),
     handoffs=[personalization_specialist],
     model=build_default_litellm_model(),
