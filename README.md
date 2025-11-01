@@ -12,7 +12,7 @@ A professional template for building AI-powered banking solutions using OpenAI A
 ## Prerequisites
 
 - Python 3.10 or higher
-- Bedrock API key
+- AWS Bedrock API key (used via LiteLLM with OpenAI Agents SDK)
 
 ## Installation
 
@@ -36,7 +36,9 @@ pip install -r requirements.txt
 4. Configure environment variables:
 ```bash
 cp .env.example .env
-# Edit .env and add your OpenAI API key
+# Edit .env and set your Bedrock API key
+# Required: AWS_BEARER_TOKEN_BEDROCK
+# Optional: DEFAULT_LITELLM_MODEL (defaults to anthropic/claude-3-5-sonnet-20240620)
 ```
 
 ## Running the Application
@@ -84,6 +86,13 @@ System for:
 - Audio transcription
 - Sentiment analysis
 - Call summarization
+
+### 5. Product Recommendations
+Personalized product recommendation system for:
+- Profile-based product ranking
+- Smart product matching
+- Personalized benefit highlighting
+- Customer segmentation
 
 ## Development
 

@@ -61,6 +61,15 @@ with col1:
             KYC verification, and AML monitoring.
             """
         )
+    
+    with st.container(border=True):
+        st.markdown("#### 🎯 Product Recommendations")
+        st.write(
+            """
+            Personalized banking product recommendations based on 
+            customer profile and financial goals.
+            """
+        )
 
 with col2:
     with st.container(border=True):
