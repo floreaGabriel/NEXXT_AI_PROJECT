@@ -1,5 +1,10 @@
-"""Product Recommendations page - Personalized banking product recommendations."""
+"""Product Recommendations page - Personalized banking product recommendations.
 
+Adds personalized product title generation powered by the Product Title Agent.
+"""
+
+import asyncio
+import json
 import streamlit as st
 from src.config.settings import AWS_BEDROCK_API_KEY
 from src.components.ui_components import render_sidebar_info, apply_button_styling
@@ -8,11 +13,28 @@ from src.agents.product_recommendation_agent import (
     ProductRecommendationContext,
     UserProfile,
 )
+from agents import Runner
+from src.agents.product_title_generation_agent import product_title_agent
 
 apply_button_styling()
 render_sidebar_info()
 
 st.title("🎯 Recomandări Personalizate de Produse")
+
+# Top auth nav
+nav_col1, nav_col2, nav_col3 = st.columns(3)
+with nav_col1:
+    st.page_link("pages/0_Login.py", label="Login")
+with nav_col2:
+    st.page_link("pages/0_Register.py", label="Register")
+with nav_col3:
+    if st.session_state.get("auth", {}).get("logged_in"):
+        email = st.session_state["auth"]["email"]
+        if st.button("Logout", use_container_width=True):
+            st.session_state.pop("auth", None)
+            st.session_state.pop("user_profile", None)
+            st.rerun()
+        st.caption(f"Autentificat ca: {email}")
 
 st.write(
     """
@@ -26,12 +48,19 @@ st.divider()
 # User Profile Input Section
 st.subheader("📋 Profilul Dumneavoastră")
 
+# Defaults from session (if logged in)
+user_defaults = st.session_state.get("user_profile", {})
+def _get_default(opt_list, value, fallback):
+    return value if isinstance(value, str) and value in opt_list else fallback
+
 col1, col2 = st.columns(2)
 
 with col1:
+    marital_options = ["Necăsătorit/ă", "Căsătorit/ă", "Divorțat/ă", "Văduv/ă"]
     marital_status = st.selectbox(
         "Status Marital",
-        ["Necăsătorit/ă", "Căsătorit/ă", "Divorțat/ă", "Văduv/ă"],
+        marital_options,
+        index=marital_options.index(_get_default(marital_options, user_defaults.get("marital_status"), marital_options[0])) if user_defaults.get("marital_status") in marital_options else 0,
         help="Statusul dumneavoastră marital actual"
     )
     
@@ -39,7 +68,7 @@ with col1:
         "Venit Anual (RON)",
         min_value=0,
         max_value=1000000,
-        value=50000,
+        value=int(user_defaults.get("annual_income", 50000)),
         step=5000,
         help="Venitul anual brut în RON"
     )
@@ -48,26 +77,29 @@ with col1:
         "Vârstă",
         min_value=18,
         max_value=100,
-        value=35,
+        value=int(user_defaults.get("age", 35)),
         help="Vârsta dumneavoastră în ani"
     )
     
     has_children = st.checkbox(
         "Am copii",
+        value=bool(user_defaults.get("has_children", False)),
         help="Bifați dacă aveți copii"
     )
 
 with col2:
+    employment_options = ["Angajat", "Independent", "Șomer", "Pensionar", "Student"]
     employment_status = st.selectbox(
         "Status Profesional",
-        ["Angajat", "Independent", "Șomer", "Pensionar", "Student"],
+        employment_options,
+        index=employment_options.index(_get_default(employment_options, user_defaults.get("employment_status"), employment_options[0])) if user_defaults.get("employment_status") in employment_options else 0,
         help="Situația dumneavoastră profesională actuală"
     )
     
     risk_tolerance = st.select_slider(
         "Toleranță la Risc",
         options=["Scăzută", "Medie", "Ridicată"],
-        value="Medie",
+        value=_get_default(["Scăzută", "Medie", "Ridicată"], user_defaults.get("risk_tolerance"), "Medie"),
         help="Cât de confortabil sunteți cu riscul financiar"
     )
     
@@ -83,7 +115,7 @@ with col2:
             "Călătorii",
             "Achiziții mari"
         ],
-        default=["Economii pe termen lung"],
+        default=user_defaults.get("financial_goals", ["Economii pe termen lung"]),
         help="Selectați obiectivele dumneavoastră financiare principale"
     )
 
@@ -182,6 +214,67 @@ if st.button("🔍 Obține Recomandări", type="primary", use_container_width=Tr
                 # Display match score
                 st.info(f"📈 Bazat pe profilul dumneavoastră: {age} ani, venit anual {annual_income:,.0f} RON, {marital_status.lower()}")
                 
+                # Prepare payload for Title Agent
+                products_payload = [
+                    {
+                        "product_id": pid,
+                        "name": data["name"],
+                        "description": data["description"],
+                        "benefits": data.get("benefits", []),
+                    }
+                    for pid, data in ranked_products
+                ]
+
+                # Ask LLM to craft personalized titles (async call)
+                llm_titles: dict[str, str] = {}
+                try:
+                    async def _run_titles():
+                        prompt = (
+                            "Context utilizator (JSON): "
+                            + UserProfile(
+                                marital_status=marital_status.lower(),
+                                annual_income=float(annual_income),
+                                age=age,
+                                employment_status=employment_status.lower(),
+                                has_children=has_children,
+                                risk_tolerance=risk_tolerance.lower(),
+                                financial_goals=[goal.lower() for goal in financial_goals],
+                            ).model_dump_json(ensure_ascii=False)
+                            + "\n\n"
+                            "Produse existente (JSON): "
+                            + json.dumps(products_payload, ensure_ascii=False)
+                            + "\n\n"
+                            "Sarcină: Generează pentru fiecare produs un titlu personalizat, concis și captivant,\n"
+                            "în limba română, potrivit profilului de mai sus. Respectă regulile din instrucțiunile agentului\n"
+                            "și NU folosi emoji-uri în titluri.\n\n"
+                            "Returnează STRICT JSON cu schema: {\n"
+                            "  \"titles\": [\n"
+                            "    {\"product_id\": \"<id>\", \"title\": \"<titlu personalizat>\"}\n"
+                            "  ]\n"
+                            "} (fără text suplimentar)."
+                        )
+
+                        return await Runner.run(product_title_agent, prompt)
+
+                    titles_result = asyncio.run(_run_titles())
+                    raw = titles_result.final_output or "{}"
+                    parsed = {}
+                    try:
+                        parsed = json.loads(raw)
+                    except Exception:
+                        # Attempt to extract JSON if model added extra text
+                        start = raw.find("{")
+                        end = raw.rfind("}")
+                        if start != -1 and end != -1 and end > start:
+                            parsed = json.loads(raw[start : end + 1])
+                    for item in parsed.get("titles", []) if isinstance(parsed, dict) else []:
+                        pid = item.get("product_id")
+                        title = item.get("title")
+                        if isinstance(pid, str) and isinstance(title, str):
+                            llm_titles[pid] = title.strip()
+                except Exception as llm_err:
+                    st.warning(f"Nu am putut genera titluri personalizate (LLM): {llm_err}")
+
                 # Display products in ranked order
                 for idx, (product_id, product) in enumerate(ranked_products, 1):
                     with st.container(border=True):
@@ -190,7 +283,8 @@ if st.button("🔍 Obține Recomandări", type="primary", use_container_width=Tr
                         with col_icon:
                             st.markdown(f"## {product['icon']}")
                         with col_title:
-                            st.markdown(f"### {idx}. {product['name']}")
+                            display_name = llm_titles.get(product_id, product['name'])
+                            st.markdown(f"### {idx}. {display_name}")
                             # Match percentage
                             match_percent = int(product['score'] * 100)
                             st.progress(product['score'], text=f"Potrivire: {match_percent}%")

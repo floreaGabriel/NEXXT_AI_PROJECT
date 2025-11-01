@@ -5,9 +5,17 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# Disable any OpenAI-based tracing/telemetry and ensure we don't use an OpenAI key
+# This prevents non-fatal 401 errors coming from tracing clients when an OpenAI
+# placeholder key is present in the environment. Our project uses Bedrock via LiteLLM.
+import os as _os
+_os.environ["AGENTS_TRACING_DISABLED"] = "true"
+_os.environ["OPENAI_TRACING_DISABLED"] = "true"
+_os.environ.pop("OPENAI_API_KEY", None)
+
 # API Configuration
 # Legacy support (some pages may still reference this)
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+OPENAI_API_KEY = None  # explicitly unused
 
 # Primary model API key: AWS Bedrock via LiteLLM
 # Expected to be provided in .env as AWS_BEARER_TOKEN_BEDROCK

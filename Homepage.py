@@ -27,6 +27,13 @@ st.title("AI-Powered Banking Solutions")
 
 st.divider()
 
+# Top quick links
+nav_c1, nav_c2 = st.columns(2)
+with nav_c1:
+    st.page_link("pages/0_Login.py", label="Login")
+with nav_c2:
+    st.page_link("pages/0_Register.py", label="Register")
+
 # Welcome section
 st.subheader("Welcome to NEXXT AI Hackathon")
 st.write(
