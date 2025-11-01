@@ -1,0 +1,320 @@
+# NEXXT AI Hackathon - Project Development Guide
+
+This document describes the coding standards, architecture, technologies, and best practices for the Raiffeisen Bank AI Solutions project.
+
+## Project Overview
+
+This is a **Streamlit-based multi-page application** for AI-powered banking solutions, built for the NEXXT AI Hackathon 2025. The project uses **multi-agent systems** with the OpenAI Agents SDK to handle complex banking workflows across four main challenge areas.
+
+### Key Technologies
+
+- **Python 3.10+** - Primary programming language
+- **Streamlit 1.44.0+** - Web application framework
+- **OpenAI Agents SDK 0.4.0+** - Multi-agent orchestration
+- **scikit-learn 1.3.0+** - Machine learning capabilities
+- **pandas 2.0.0+** - Data manipulation
+- **plotly 5.18.0+** - Data visualization
+- **python-dotenv 1.0.0+** - Environment configuration
+
+## Project Structure
+
+```
+NEXXT_AI_PROJECT/
+├── Homepage.py              # Main Streamlit entry point
+├── pages/                   # Streamlit pages (1-4 numbered)
+│   ├── 1_Financial_Analysis.py
+│   ├── 2_Customer_Service.py
+│   ├── 3_Compliance_Tool.py
+│   └── 4_Call_Center_Analytics.py
+├── src/
+│   ├── agents/             # Multi-agent implementations
+│   ├── components/         # Reusable UI components
+│   ├── config/             # Application configuration
+│   └── utils/              # Helper utilities
+├── assets/                 # Static assets (logos, images)
+├── .streamlit/            # Streamlit configuration
+│   └── config.toml        # Theme and server settings
+└── requirements.txt       # Python dependencies
+```
+
+## Coding Standards
+
+### General Python Style
+
+1. **Type Hints**: Always use type hints for function parameters and return values
+   ```python
+   def format_currency(amount: float, currency: str = "RON") -> str:
+       """Format currency values."""
+       return f"{amount:,.2f} {currency}"
+   ```
+
+2. **Docstrings**: Use descriptive docstrings for all modules, classes, and functions
+   ```python
+   """Module-level docstring explaining purpose."""
+   
+   def function_name():
+       """Concise description of what the function does."""
+       pass
+   ```
+
+3. **Modern Python**: Use modern Python 3.10+ features
+   - Union types with `|` instead of `Union[]`
+   - Pattern matching where appropriate
+   - Structural pattern matching for complex conditionals
+
+### Agent Development Pattern
+
+All agents follow the **OpenAI Agents SDK** pattern with:
+
+1. **Pydantic Context Models** for state management
+   ```python
+   class FinancialContext(BaseModel):
+       """Context for financial analysis operations."""
+       user_id: str | None = None
+       analysis_type: str | None = None
+   ```
+
+2. **Function Tools** with type annotations
+   ```python
+   @function_tool
+   def analyze_transactions(
+       ctx: RunContextWrapper[FinancialContext],
+       period: Annotated[str, "Time period for analysis"],
+   ) -> str:
+       """Analyze transaction patterns for the specified period."""
+       # Implementation here
+       return "Analysis results"
+   ```
+
+3. **Specialized Agents** for specific tasks
+   ```python
+   data_analyst_agent = Agent[FinancialContext](
+       name="Data Analyst",
+       instructions="""Clear instructions about role and responsibilities.""",
+       tools=[analyze_transactions, calculate_risk_score],
+   )
+   ```
+
+4. **Orchestrator Agent** for coordination
+   ```python
+   orchestrator_agent = Agent[FinancialContext](
+       name="Orchestrator",
+       instructions="""Coordinate between specialized agents.""",
+       handoffs=[agent1, agent2, agent3],
+   )
+   ```
+
+### Streamlit Page Structure
+
+All pages follow this consistent structure:
+
+```python
+"""Page title - Brief description."""
+
+import streamlit as st
+from src.config.settings import OPENAI_API_KEY
+from src.components.ui_components import render_sidebar_info, apply_button_styling
+from src.agents.specific_agent import agent_orchestrator, ContextModel
+
+# Apply styling and sidebar
+apply_button_styling()
+render_sidebar_info()
+
+# Page title
+st.title("Page Title")
+
+# Page description
+st.write("Description of functionality")
+
+st.divider()
+
+# Main content sections
+# Input section
+# Processing logic
+# Results display
+```
+
+### UI/UX Standards
+
+1. **Branding**: Raiffeisen Bank branding is mandatory
+   - Primary color: `#fee600` (Raiffeisen yellow)
+   - Text color: `#2b2d33` (Dark gray)
+   - Background: `#ffffff` (White)
+   - Secondary background: `#f8f9fa` (Light gray)
+   - Font: Space Grotesk
+
+2. **Layout Patterns**:
+   - Use `st.divider()` to separate sections
+   - Use `st.columns()` for side-by-side layouts
+   - Use `st.container(border=True)` for card-like sections
+   - Use `st.spinner()` for loading states
+
+3. **User Feedback**:
+   - `st.success()` for successful operations
+   - `st.error()` for errors with helpful messages
+   - `st.warning()` for validation issues
+   - `st.info()` for informational messages
+
+4. **Buttons**:
+   - Use `type="primary"` for main actions
+   - Use `use_container_width=True` for full-width buttons
+   - Button text color is always `#2b2d33`
+
+## Current Implementation Status
+
+**IMPORTANT**: The current agents and pages are **simple mockups/placeholders**. They demonstrate the architecture but contain TODO comments where actual implementation is needed.
+
+### Mockup Patterns
+
+1. **Agent Tools**: Return placeholder strings
+   ```python
+   @function_tool
+   def analyze_transactions(period: Annotated[str, "Time period"]) -> str:
+       # TODO: Implement actual transaction analysis logic
+       return f"Transaction analysis for {period}: Sample results would go here."
+   ```
+
+2. **Page Logic**: Use commented-out agent execution
+   ```python
+   # TODO: Implement actual agent execution
+   # context = FinancialContext(analysis_type=analysis_type.lower())
+   # result = await Runner.run(orchestrator_agent, user_query, context=context)
+   
+   # Placeholder result
+   st.success("Analysis complete!")
+   ```
+
+3. **Data**: Use sample/mock data
+   ```python
+   # Placeholder metrics
+   st.metric("Total Transactions", "1,234", "+12%")
+   ```
+
+## Development Workflow
+
+### Adding New Features
+
+1. **For New Agents**:
+   - Create file in `src/agents/`
+   - Define Pydantic context model
+   - Implement function tools with type hints and docstrings
+   - Create specialized agents
+   - Create orchestrator agent with handoffs
+   - Update corresponding page to use the agent
+
+2. **For New Pages**:
+   - Create in `pages/` with naming: `{number}_{name}.py`
+   - Import and apply UI components
+   - Follow standard page structure
+   - Implement input → processing → results flow
+   - Add to main Homepage.py if needed
+
+3. **For UI Components**:
+   - Add to `src/components/ui_components.py`
+   - Keep consistent with Raiffeisen branding
+   - Make reusable and well-documented
+
+### Configuration Management
+
+- **Environment Variables**: Use `.env` file (never commit)
+  - Copy `.env.example` to `.env`
+  - Add API keys and sensitive data
+  
+- **App Settings**: Configure in `src/config/settings.py`
+  - Model selection
+  - Temperature and other hyperparameters
+  - Agent configuration
+
+- **Streamlit Theme**: Configure in `.streamlit/config.toml`
+  - Colors aligned with Raiffeisen branding
+  - Font settings
+  - Server configuration
+
+## Best Practices
+
+### Error Handling
+
+Always implement proper error handling:
+
+```python
+try:
+    # Agent execution or processing
+    result = process_data()
+except Exception as e:
+    st.error(f"An error occurred: {str(e)}")
+    # Log error for debugging
+```
+
+### API Key Validation
+
+Check for API key before executing agents:
+
+```python
+if not OPENAI_API_KEY:
+    st.error("Please configure your OpenAI API key in the .env file")
+    return
+```
+
+### State Management
+
+Use Streamlit session state for persistent data:
+
+```python
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+```
+
+### Async Considerations
+
+While OpenAI Agents SDK may use async patterns, remember Streamlit is synchronous. Handle accordingly.
+
+## Challenge Areas Implementation Guide
+
+### 1. Financial Data Analysis
+- **Multi-agent system**: Data analyst → Report generator
+- **Key features**: Transaction analysis, risk scoring, report generation
+- **ML opportunities**: Anomaly detection, risk modeling with scikit-learn
+
+### 2. Customer Service
+- **Chat interface**: Use `st.chat_message` and `st.chat_input`
+- **Multi-agent system**: FAQ handler → Account manager → Escalation handler
+- **Key features**: Natural language understanding, context retention
+
+### 3. Compliance & Regulations
+- **Key features**: KYC verification, AML monitoring, compliance reporting
+- **ML opportunities**: Classification models for risk assessment
+
+### 4. Call Center Analytics
+- **Multi-agent system**: Transcriber → Analyzer → Summarizer
+- **Key features**: Audio transcription, sentiment analysis, key point extraction
+- **ML opportunities**: NLP with scikit-learn, sentiment classification
+
+## Testing and Quality
+
+When implementing actual features:
+
+1. **Validate inputs** before processing
+2. **Handle edge cases** gracefully
+3. **Provide clear error messages**
+4. **Test with various input types**
+5. **Ensure responsive UI** with proper loading states
+
+## Deployment Notes
+
+To run the application:
+```bash
+streamlit run Homepage.py
+```
+
+The app will be available at `http://localhost:8501`
+
+## Resources
+
+- [OpenAI Agents SDK Documentation](https://github.com/openai/openai-agents-python)
+- [Streamlit Documentation](https://docs.streamlit.io)
+- [scikit-learn Documentation](https://scikit-learn.org/)
+- [Pydantic Documentation](https://docs.pydantic.dev/)
+
+---
+
+**Note**: This is a hackathon template. The current implementation provides the architecture and structure. Your task is to replace the TODO comments and placeholder logic with actual AI-powered functionality.
