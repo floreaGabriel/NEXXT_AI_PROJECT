@@ -26,6 +26,7 @@ from src.agents.user_experience_summary_agent import (
     personalize_products_batch,  # Direct function for personalization
 )
 from src.agents.product_title_generation_agent import product_title_agent
+from src.agents.email_summary_agent import email_summary_agent
 
 apply_button_styling()
 render_sidebar_info()
@@ -35,9 +36,11 @@ st.title("🎯 Recomandări Personalizate de Produse")
 # Top auth nav (from Sabin page)
 nav_col1, nav_col2, nav_col3 = st.columns(3)
 with nav_col1:
-    st.page_link("pages/0_Login.py", label="Login")
+    if st.button("Login", use_container_width=True):
+        st.switch_page("pages/0_Login.py")
 with nav_col2:
-    st.page_link("pages/1_Register.py", label="Register")
+    if st.button("Register", use_container_width=True):
+        st.switch_page("pages/1_Register.py")
 with nav_col3:
     if st.session_state.get("auth", {}).get("logged_in"):
         email = st.session_state["auth"]["email"]
@@ -46,6 +49,18 @@ with nav_col3:
             st.session_state.pop("user_profile", None)
             st.rerun()
         st.caption(f"Autentificat ca: {email}")
+
+# Require authentication to proceed further
+if not st.session_state.get("auth", {}).get("logged_in"):
+    st.warning("Pentru a accesa recomandările personalizate și a primi sumarul pe email, vă rugăm să vă autentificați sau să vă înregistrați.")
+    link_col1, link_col2 = st.columns(2)
+    with link_col1:
+        if st.button("→ Autentificare", use_container_width=True):
+            st.switch_page("pages/0_Login.py")
+    with link_col2:
+        if st.button("→ Înregistrare", use_container_width=True):
+            st.switch_page("pages/1_Register.py")
+    st.stop()
 
 st.write(
     """
@@ -515,6 +530,127 @@ Return ONLY a JSON array with this exact structure:
                         # Personalized note for top recommendation
                         if idx == 1:
                             st.success("⭐ **Recomandarea Noastră Principală** - Acest produs se potrivește cel mai bine profilului dumneavoastră!")
+
+                st.divider()
+                st.subheader("✉️ Primește sumarul pe email")
+                
+                st.info("📧 Emailul va fi trimis la adresa ta de autentificare. Verifică și folder-ul Spam dacă nu îl găsești în Inbox.")
+
+                if st.button("Trimite-mi summary-ul pe email", type="primary", use_container_width=True):
+                    user_email = st.session_state.get("auth", {}).get("email")
+                    if not user_email:
+                        st.error("Autentificați-vă pentru a trimite sumarul pe email.")
+                    elif not AWS_BEDROCK_API_KEY:
+                        st.error("Configurați cheia Bedrock în .env (AWS_BEARER_TOKEN_BEDROCK).")
+                    else:
+                        # Check if SMTP is configured
+                        import os
+                        smtp_host = os.getenv("SMTP_HOST")
+                        if not smtp_host:
+                            st.error(
+                                "⚠️ **SMTP nu este configurat!**\n\n"
+                                "Pentru a trimite emailuri, configurează următoarele variabile în fișierul `.env`:\n"
+                                "- `SMTP_HOST` (ex: smtp.gmail.com)\n"
+                                "- `SMTP_PORT` (ex: 587)\n"
+                                "- `SMTP_USER` (emailul tău)\n"
+                                "- `SMTP_PASSWORD` (App Password pentru Gmail)\n\n"
+                                "📖 Consultă ghidul complet: `EMAIL_SETUP_GUIDE.md`"
+                            )
+                        else:
+                            # Create an expander for detailed logs
+                            log_expander = st.expander("📋 Detalii Trimitere Email (Click pentru logs)", expanded=False)
+                            
+                            with st.spinner("Generăm emailul și îl trimitem..."):
+                                try:
+                                    import os
+                                    
+                                    # Display SMTP configuration (masked password)
+                                    with log_expander:
+                                        st.write("**🔧 Configurație SMTP:**")
+                                        smtp_host = os.getenv("SMTP_HOST", "NU SETAT")
+                                        smtp_port = os.getenv("SMTP_PORT", "NU SETAT")
+                                        smtp_user = os.getenv("SMTP_USER", "NU SETAT")
+                                        smtp_pass = os.getenv("SMTP_PASSWORD", "")
+                                        from_email = os.getenv("FROM_EMAIL", smtp_user)
+                                        
+                                        st.code(f"""
+SMTP_HOST: {smtp_host}
+SMTP_PORT: {smtp_port}
+SMTP_USER: {smtp_user}
+SMTP_PASSWORD: {'*' * len(smtp_pass) if smtp_pass else 'NU SETAT'} ({len(smtp_pass)} caractere)
+FROM_EMAIL: {from_email}
+                                        """)
+                                        
+                                        st.write(f"**📧 Destinatar:** {user_email}")
+                                        st.write("**📝 Generare conținut email...**")
+                                    
+                                    # Build a compact summary payload (top 5)
+                                    top_items = []
+                                    for pid, prod in ranked_products[:5]:
+                                        top_items.append({
+                                            "product_id": pid,
+                                            "name_ro": prod.get("name_ro"),
+                                            "name_en": prod.get("name_en"),
+                                            "score": prod.get("score"),
+                                            "summary": prod.get("personalized_summary") or prod.get("base_summary", ""),
+                                        })
+
+                                    subject = "Recomandările dumneavoastră personalizate - Rezumat"
+                                    user_profile_json = user_profile.model_dump_json(ensure_ascii=False)
+                                    items_json = json.dumps(top_items, ensure_ascii=False)
+
+                                    with log_expander:
+                                        st.write(f"**📋 Subiect email:** {subject}")
+                                        st.write(f"**🎯 Produse incluse:** {len(top_items)}")
+
+                                    prompt = (
+                                        f"Recipient: {user_email}\n"
+                                        f"Subject: {subject}\n\n"
+                                        "Instrucțiuni: Redactează un email scurt în limba română (fără emoji), politicos, "
+                                        "cu un rezumat al recomandărilor de mai jos. Menține 120–200 cuvinte, listează 3–5 produse cu câte o propoziție.\n\n"
+                                        f"Profil utilizator (JSON): {user_profile_json}\n\n"
+                                        f"Produse (JSON): {items_json}\n\n"
+                                        "După ce finalizezi textul emailului, apelează tool-ul send_email cu câmpurile: to, subject, body."
+                                    )
+
+                                    with log_expander:
+                                        st.write("**🤖 Apelare AI Agent pentru generare email...**")
+
+                                    async def _send():
+                                        return await Runner.run(email_summary_agent, prompt)
+
+                                    with log_expander:
+                                        st.write("**📤 Trimitere email prin SMTP...**")
+                                    
+                                    send_result = asyncio.run(_send())
+                                    
+                                    with log_expander:
+                                        st.write("**✅ Răspuns Agent:**")
+                                        st.json(send_result.model_dump() if hasattr(send_result, 'model_dump') else str(send_result))
+                                    
+                                    st.success(f"✅ **Email trimis cu succes către: {user_email}**\n\nVerifică inbox-ul (și folder-ul Spam)!")
+                                    
+                                except Exception as e:
+                                    error_msg = str(e)
+                                    
+                                    with log_expander:
+                                        st.write("**❌ EROARE:**")
+                                        st.code(error_msg)
+                                        
+                                        import traceback
+                                        st.write("**📋 Traceback complet:**")
+                                        st.code(traceback.format_exc())
+                                    
+                                    st.error(
+                                        f"❌ **Eroare la trimiterea emailului:**\n\n```\n{error_msg}\n```\n\n"
+                                        "**Verificări:**\n"
+                                        "- SMTP_PASSWORD are spații? Trebuie să fie 16 caractere fără spații!\n"
+                                        "- SMTP_HOST, SMTP_USER, SMTP_PASSWORD sunt setate în `.env`?\n"
+                                        "- Pentru Gmail, folosești App Password (nu parola normală)?\n"
+                                        "- Conexiunea la internet funcționează?\n\n"
+                                        "📋 Vezi detalii complete în secțiunea 'Detalii Trimitere Email' de mai sus.\n\n"
+                                        "📖 Consultă ghidul: `EMAIL_SETUP_GUIDE.md`"
+                                    )
                 
             except Exception as e:
                 st.error(f"A apărut o eroare: {str(e)}")

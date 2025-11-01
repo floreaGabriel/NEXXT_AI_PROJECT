@@ -26,9 +26,11 @@ st.title("Înregistrare cont")
 # Top nav shortcuts
 col_nav1, col_nav2 = st.columns(2)
 with col_nav1:
-    st.page_link("pages/0_Login.py", label="Ai deja cont? Autentifică-te →")
+    if st.button("Ai deja cont? Autentifică-te →", use_container_width=True):
+        st.switch_page("pages/0_Login.py")
 with col_nav2:
-    st.page_link("pages/2_Product_Recommendations_Florea.py", label="Recomandări produse →")
+    if st.button("Recomandări produse →", use_container_width=True):
+        st.switch_page("pages/2_Product_Recommendations_Florea.py")
 
 st.divider()
 
@@ -73,8 +75,16 @@ with st.form("register_form", clear_on_submit=False, border=True):
         elif not last_name or not first_name:
             st.error("Completați nume și prenume.")
         else:
+            # Check if user already exists in database first
+            existing_user_db = None
+            try:
+                app_db.init_users_table()
+                existing_user_db = app_db.get_user_by_email(email)
+            except Exception:
+                pass  # Database not configured, will check session_state only
+            
             users = st.session_state["users_db"]
-            if email in users:
+            if email in users or existing_user_db is not None:
                 st.error("Există deja un cont cu acest email.")
             else:
                 # Mock pentru câmpurile nespecificate
@@ -98,6 +108,7 @@ with st.form("register_form", clear_on_submit=False, border=True):
 
                 st.session_state["auth"] = {"logged_in": True, "email": email}
                 st.session_state["user_profile"] = profile
+                st.session_state["redirect_to_recommendations"] = True
                 st.success("Cont creat cu succes și autentificat!")
 
                 # Persist in Postgres (if configured)
@@ -122,6 +133,10 @@ with st.form("register_form", clear_on_submit=False, border=True):
                 except Exception as db_err:
                     st.warning(f"Nu am putut salva în baza de date: {db_err}")
 
-                st.page_link("pages/2_Product_Recommendations_Florea.py", label="Continuă la Recomandări →")
+# Handle redirect after successful registration (outside form)
+if st.session_state.get("redirect_to_recommendations"):
+    st.session_state.pop("redirect_to_recommendations")
+    if st.button("Continuă la Recomandări →", type="primary", use_container_width=True):
+        st.switch_page("pages/2_Product_Recommendations_Florea.py")
 
-st.caption("Demo: înregistrare în memorie, doar pentru testare.")
+st.caption("Demo: înregistrare cu salvare în baza de date PostgreSQL.")
