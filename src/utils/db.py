@@ -14,6 +14,10 @@ import os
 from typing import Any, Dict
 
 import psycopg
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 
 KNOWN_COLUMNS = {
@@ -26,6 +30,7 @@ KNOWN_COLUMNS = {
     "employment_status",
     "has_children",
     "number_of_children",
+    "user_plan",
 }
 
 
@@ -55,6 +60,7 @@ def init_users_table() -> None:
         employment_status TEXT,
         has_children BOOLEAN,
         number_of_children INT,
+        user_plan TEXT,
         extra JSONB DEFAULT '{}'::jsonb,
         created_at TIMESTAMPTZ DEFAULT now(),
         updated_at TIMESTAMPTZ DEFAULT now()
@@ -126,7 +132,7 @@ def get_user_by_email(email: str) -> Dict[str, Any] | None:
     sql = """
     SELECT email, password_hash, first_name, last_name, age, 
            marital_status, employment_status, has_children, 
-           number_of_children, extra
+           number_of_children, user_plan, extra
     FROM users
     WHERE email = %s
     LIMIT 1;
@@ -152,8 +158,39 @@ def get_user_by_email(email: str) -> Dict[str, Any] | None:
                     "employment_status": row[6],
                     "has_children": row[7],
                     "number_of_children": row[8],
-                    "extra": row[9] if row[9] else {},
+                    "user_plan": row[9],
+                    "extra": row[10] if row[10] else {},
                 }
     except Exception:
         # If database is not configured or connection fails, return None
         return None
+
+
+def save_financial_plan(email: str, plan_text: str) -> bool:
+    """
+    Save or update the financial plan for a user.
+    
+    Args:
+        email: User's email address
+        plan_text: The markdown text of the financial plan
+        
+    Returns:
+        True if successful, False otherwise
+    """
+    sql = """
+    UPDATE users
+    SET user_plan = %s,
+        updated_at = now()
+    WHERE email = %s;
+    """
+    
+    try:
+        with _conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, (plan_text, email))
+                conn.commit()
+                return cur.rowcount > 0
+    except Exception as e:
+        print(f"Error saving financial plan: {e}")
+        return False
+
