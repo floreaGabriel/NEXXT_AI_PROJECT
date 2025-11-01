@@ -1,25 +1,18 @@
-version: "3.9"
+version: '3.8'
 
 services:
-  mcp-postgres:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: mcp-postgres:latest
+  postgres:
+    image: postgres:16-alpine
+    container_name: app-postgres
     environment:
-      PGHOST: ${PGHOST}
-      PGPORT: ${PGPORT:-5432}
-      PGUSER: ${PGUSER}
-      PGPASSWORD: ${PGPASSWORD}
-      PGDATABASE: ${PGDATABASE}
-      PGSSLMODE: ${PGSSLMODE:-prefer}
-      READ_ONLY: ${READ_ONLY:-true}
-      QUERY_ROW_LIMIT: ${QUERY_ROW_LIMIT:-200}
-      SERVER_HOST: 0.0.0.0
-      SERVER_PORT: 8042
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+      POSTGRES_DB: app
     ports:
-      - "8042:8042"
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
     restart: unless-stopped
 
 volumes:
-  pgdata:
+  postgres_data:
