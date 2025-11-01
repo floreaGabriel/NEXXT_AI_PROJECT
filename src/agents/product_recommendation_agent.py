@@ -18,6 +18,7 @@ class UserProfile(BaseModel):
     has_children: bool = False
     risk_tolerance: str | None = None  # low, medium, high
     financial_goals: list[str] = []  # e.g., ["savings", "investment", "home_purchase"]
+    education_level: str | None = None  # fara_studii_superioare, liceu, facultate, masterat, doctorat
 
 class ProductRecommendationContext(BaseModel):
     """Context for product recommendation operations."""
@@ -27,76 +28,86 @@ class ProductRecommendationContext(BaseModel):
 
 
 def _get_products_catalog_dict() -> dict:
-    """Internal helper: return products catalog as dict."""
+    """Internal helper: return products catalog as dict. Contains official Raiffeisen Bank Romania products."""
     products = {
-        "shopping_credit_card": {
-            "name": "Shopping Credit Card",
-            "description": "Credit card with interest-free installment options at partner merchants",
-            "benefits": ["Up to 12 interest-free installments", "Available for purchases at partner stores", "Maximum transaction value 40,000 RON or 10,000 EUR"],
-            "target_audience": "Customers with regular income who make frequent purchases at partner merchants"
+        "card_cumparaturi_rate": {
+            "name": "Card de Cumpărături în Rate",
+            "description": "Card de credit cu opțiuni de plată în rate fără dobândă la comercianții parteneri Raiffeisen Bank",
+            "base_summary": "Card de credit special pentru cumpărături în rate fără dobândă la magazinele partenere, cu posibilitatea de a plăti până la 12 rate lunare fixe pentru achizițiile tale.",
+            "benefits": ["Rate fără dobândă până la 12 luni", "Disponibil la comercianți parteneri", "Valoare maximă tranzacție 40.000 RON sau 10.000 EUR"],
+            "target_audience": "Clienți cu venituri regulate care fac achiziții frecvente la parteneri"
         },
         
-        "term_deposits": {
-            "name": "Term Deposits",
-            "description": "Bank deposits with fixed and guaranteed interest rates in RON, EUR, and USD",
-            "benefits": ["Competitive interest rates (5.70% for 3-month RON, 5.20% for 12-month RON)", "Minimum deposit: 500 RON, 200 EUR/USD", "Deposit periods: 1-12 months", "Additional 0.30% bonus interest for salary clients", "Guaranteed by Deposit Guarantee Fund"],
-            "target_audience": "Clients who want to save without risk and seek guaranteed returns"
+        "depozite_termen": {
+            "name": "Depozite la Termen",
+            "description": "Depozite bancare cu dobândă fixă și garantată în RON, EUR și USD",
+            "base_summary": "Depozit bancar sigur cu dobândă fixă garantată, oferind randamente competitive cu protecție totală a capitalului pe perioade flexibile de la 1 la 12 luni.",
+            "benefits": ["Dobânzi competitive (5.70% la 3 luni RON, 5.20% la 12 luni RON)", "Depozit minim: 500 RON, 200 EUR/USD", "Perioade: 1-12 luni", "Bonus 0.30% pentru clienți cu salariu", "Garantat prin Fondul de Garantare a Depozitelor"],
+            "target_audience": "Clienți care doresc să economisească fără risc cu randament garantat"
         },
         
-        "savings_account": {
-            "name": "Super Acces Plus Savings Account",
-            "description": "Flexible savings account with tiered interest rates and unlimited access to funds",
-            "benefits": ["Variable interest rates tiered by balance (2-3% RON, 0.50% EUR, 0.30% USD)", "Minimum opening amount: 1 RON/EUR/USD", "Unlimited withdrawals without penalties", "Zero administration fees", "Daily interest calculation, monthly capitalization", "SavingBox automatic savings feature (1%, 3%, 5%, 10% of debit card payments)"],
-            "target_audience": "Clients who want flexibility and immediate access to their savings"
+        "cont_economii_super_acces": {
+            "name": "Cont de Economii Super Acces Plus",
+            "description": "Cont de economii flexibil cu dobândă progresivă și acces nelimitat la fonduri",
+            "base_summary": "Cont de economii cu dobândă variabilă progresivă în funcție de sold, oferind acces instant la bani fără penalități și fără comisioane de administrare.",
+            "benefits": ["Dobândă variabilă progresivă (2-3% RON, 0.50% EUR, 0.30% USD)", "Sumă minimă deschidere: 1 RON/EUR/USD", "Retrageri nelimitate fără penalizări", "Zero comision administrare", "Calcul zilnic dobândă, capitalizare lunară", "Funcție SavingBox economisire automată (1%, 3%, 5%, 10% din plățile cu cardul)"],
+            "target_audience": "Clienți care vor flexibilitate și acces imediat la economii"
         },
         
-        "debit_card_premium": {
-            "name": "Visa Debit Platinum Card",
-            "description": "Premium debit card with extended benefits and included insurance",
-            "benefits": ["Zero commission for merchant payments", "LoungeKey airport lounge access", "Travel insurance included", "Exclusive discounts and offers", "BlackCab service", "Premium roadside assistance", "Concierge service"],
-            "target_audience": "High-income clients who travel frequently and seek premium banking services"
+        "card_debit_platinum": {
+            "name": "Card de Debit Visa Platinum",
+            "description": "Card de debit premium cu beneficii extinse și asigurări incluse",
+            "base_summary": "Card de debit premium cu comision zero la plăți, acces în saloanele de aeroport LoungeKey, asigurare de călătorie inclusă și reduceri exclusive.",
+            "benefits": ["Zero comision plăți la comercianți", "Acces LoungeKey în saloanele de aeroport", "Asigurare de călătorie inclusă", "Reduceri și oferte exclusive", "Serviciu BlackCab", "Asistență rutieră premium", "Serviciu de concierge"],
+            "target_audience": "Clienți cu venituri mari care călătoresc frecvent și doresc servicii premium"
         },
         
-        "mortgage_credit": {
-            "name": "Casa Ta Mortgage Credit",
-            "description": "Real estate loan for purchasing, constructing or refinancing a home",
-            "benefits": ["Amount: 5,000-300,000 EUR equivalent", "Period: 3-30 years", "Minimum down payment: 15%", "Fixed interest for 3 or 5 years starting from 5.10%, then variable (margin 2.40% + IRCC)", "Refinancing option with bonus of 2,000 RON", "Noua Casa government program available (5-15% down payment, 2% interest)"],
-            "target_audience": "Young families or clients who want to purchase a home"
+        "credit_ipotecar_casa_ta": {
+            "name": "Credit Ipotecar Casa Ta",
+            "description": "Credit imobiliar pentru achiziție, construcție sau refinanțare locuință",
+            "base_summary": "Credit imobiliar pentru cumpărarea sau refinanțarea casei tale, cu dobândă competitivă, perioadă până la 30 de ani și avans minim de 15%, inclusiv opțiuni prin programul Prima Casă.",
+            "benefits": ["Sumă: 5.000-300.000 EUR echivalent", "Perioadă: 3-30 ani", "Avans minim: 15%", "Dobândă fixă 3-5 ani de la 5.10%, apoi variabilă (marjă 2.40% + IRCC)", "Refinanțare cu bonus 2.000 RON", "Program Noua Casă disponibil (avans 5-15%, dobândă 2%)"],
+            "target_audience": "Familii tinere sau clienți care doresc să cumpere casă"
         },
         
-        "personal_loan": {
-            "name": "Flexicredit Personal Loan",
-            "description": "Fast unsecured loan for any purpose",
-            "benefits": ["Amount: 500-50,000 EUR equivalent in RON", "Period: 18 months to 5 years", "No collateral required", "Interest from 5.75%", "APR between 8.11%-36.66%", "Fast approval", "Only ID and ANAF consent required", "Minimum net income: 510 EUR"],
-            "target_audience": "Clients with short/medium-term financial needs and regular income"
+        "credit_nevoi_personale": {
+            "name": "Credit de Nevoi Personale Flexicredit",
+            "description": "Credit rapid negarantat pentru orice scop personal",
+            "base_summary": "Credit personal rapid cu aprobare în 24 de ore, fără garanții până la 50.000 EUR echivalent, cu rată flexibilă și perioadă de rambursare de până la 5 ani.",
+            "benefits": ["Sumă: 500-50.000 EUR echivalent în RON", "Perioadă: 18 luni până la 5 ani", "Fără garanții", "Dobândă de la 5.75%", "DAE între 8.11%-36.66%", "Aprobare rapidă", "Necesare doar CI și consimțământ ANAF", "Venit net minim: 510 EUR"],
+            "target_audience": "Clienți cu nevoi financiare pe termen scurt/mediu și venituri regulate"
         },
         
-        "investment_funds": {
-            "name": "SmartInvest Investment Plans",
-            "description": "Professionally managed diversified investment portfolios through Raiffeisen Asset Management",
-            "benefits": ["Monthly automatic investment from 200 RON/50 EUR/50 USD", "Multiple fund options (bonds, mixed, equity)", "Current fees: 0.99%-2.43% depending on fund", "Zero costs for opening/closing investment plan", "100% online management via Smart Mobile", "Tax advantages (1% tax for holdings over 365 days, 3% under 365 days)", "Professional portfolio management", "Flexible contributions"],
-            "target_audience": "Clients with medium/high risk tolerance seeking long-term capital growth"
+        "fonduri_investitii_smartinvest": {
+            "name": "Planuri de Investiții SmartInvest",
+            "description": "Portofolii de investiții diversificate gestionate profesional prin Raiffeisen Asset Management",
+            "base_summary": "Planuri de investiții cu contribuții lunare automate gestionate de experți, cu opțiuni multiple de fonduri (obligațiuni, mixte, acțiuni) și avantaje fiscale pentru investiții pe termen lung.",
+            "benefits": ["Investiție lunară automată de la 200 RON/50 EUR/50 USD", "Opțiuni multiple de fonduri (obligațiuni, mixte, acțiuni)", "Comisioane curente: 0.99%-2.43% în funcție de fond", "Costuri zero pentru deschidere/închidere plan", "Administrare 100% online prin Smart Mobile", "Avantaje fiscale (taxă 1% pentru dețineri peste 365 zile, 3% sub 365 zile)", "Gestiune profesională portofoliu", "Contribuții flexibile"],
+            "target_audience": "Clienți cu toleranță medie/ridicată la risc care caută creștere de capital pe termen lung"
         },
         
-        "private_pension": {
-            "name": "Raiffeisen Acumulare Private Pension (Pillar III)",
-            "description": "Optional long-term pension savings plan with tax advantages",
-            "benefits": ["Voluntary contributions with individual accounts", "Maximum contribution: 15% of gross monthly income", "Minimum contribution: 100 RON/month (Raiffeisen Acumulare)", "Tax exemptions up to 400 EUR/year for both employee and employer contributions", "Professionally invested in various financial instruments", "Potential for better returns than public pension system", "Direct relationship between contributions and benefits"],
-            "target_audience": "Employed clients planning for retirement who want to maintain living standards after retirement"
+        "pensie_privata_pilon3": {
+            "name": "Pensie Privată Raiffeisen Acumulare (Pilon III)",
+            "description": "Plan opțional de economisire pe termen lung pentru pensie cu avantaje fiscale",
+            "base_summary": "Plan de pensie privată facultativă cu contribuții voluntare, avantaje fiscale de până la 400 EUR/an și investiții profesionale pentru menținerea nivelului de trai la pensionare.",
+            "benefits": ["Contribuții voluntare cu conturi individuale", "Contribuție maximă: 15% din venitul brut lunar", "Contribuție minimă: 100 RON/lună (Raiffeisen Acumulare)", "Scutiri fiscale până la 400 EUR/an pentru contribuții angajat și angajator", "Investiții profesionale în instrumente financiare diverse", "Potențial de randament superior sistemului public de pensii", "Relație directă între contribuții și beneficii"],
+            "target_audience": "Clienți angajați care plănuiesc pensionarea și doresc să mențină nivelul de trai"
         },
         
-        "junior_account": {
-            "name": "Teen Account (14-17 years)",
-            "description": "Special current account for adolescents aged 14-17 years",
-            "benefits": ["Zero fees for account and card administration", "Zero fees for Smart Mobile app", "Free cash withdrawals at any ATM in Romania", "Debit card included (VISA)", "Apple Pay and Google Pay enrollment", "Real-time notifications", "Financial bonus up to unspecified amount", "Parental supervision features", "Financial education tool"],
-            "target_audience": "Parents who want to teach financial responsibility to their teenage children (14-17 years old)"
+        "cont_junior_adolescenti": {
+            "name": "Cont Junior pentru Adolescenți (14-17 ani)",
+            "description": "Cont curent special pentru adolescenți cu vârste între 14-17 ani",
+            "base_summary": "Cont curent pentru tinerii între 14-17 ani cu card de debit VISA inclus, zero comisioane, retrageri gratuite de numerar la orice bancomat din România și aplicație Smart Mobile pentru educație financiară.",
+            "benefits": ["Zero comisioane cont și card", "Zero comisioane Smart Mobile", "Retrageri gratuite numerar la orice bancomat din România", "Card de debit inclus (VISA)", "Apple Pay și Google Pay", "Notificări în timp real", "Bonus financiar", "Supraveghere părintească", "Instrument de educație financiară"],
+            "target_audience": "Părinți care doresc să învețe responsabilitatea financiară copiilor adolescenți (14-17 ani)"
         },
         
-        "life_insurance": {
-            "name": "Life Insurance with Guaranteed Savings Component",
-            "description": "Life insurance with savings and financial protection for family",
-            "benefits": ["Financial protection in case of death or permanent disability from accident", "Guaranteed savings component with fixed interest rate", "Junior Protect Plus: savings for children's future (education, business start)", "Senior Protect Plus: retirement comfort and financial stability", "Minimum monthly premium: 100 RON", "No medical exam required", "Simple policy issuance", "Guaranteed sum insured plus supplementary benefit at maturity", "Premium payment continues by insurer in case of covered event"],
-            "target_audience": "Clients with families who want financial protection and long-term savings combined"
+        "asigurare_viata_economii": {
+            "name": "Asigurare de Viață cu Componentă de Economisire",
+            "description": "Asigurare de viață cu economii garantate și protecție financiară pentru familie",
+            "base_summary": "Asigurare de viață combinată cu economii garantate la dobândă fixă, oferind protecție financiară familiei în caz de deces sau invaliditate și sumă asigurată la scadență.",
+            "benefits": ["Protecție financiară în caz de deces sau invaliditate permanentă din accident", "Componentă de economii garantată cu dobândă fixă", "Junior Protect Plus: economii pentru viitorul copiilor (educație, afacere)", "Senior Protect Plus: confort la pensionare și stabilitate financiară", "Primă lunară minimă: 100 RON", "Fără examen medical", "Emitere simplă poliță", "Sumă asigurată garantată plus beneficiu suplimentar la scadență", "Plata primei continuată de asigurător în caz de eveniment acoperit"],
+            "target_audience": "Clienți cu familie care doresc protecție financiară și economii pe termen lung combinate"
         }
     }
     return products
@@ -118,40 +129,40 @@ def _calculate_product_score_internal(product_id: str, profile: UserProfile) -> 
 
     # Age-based scoring
     if profile.age is not None:
-        if product_id == "pensie_privata" and profile.age >= 40:
+        if product_id == "pensie_privata_pilon3" and profile.age >= 40:
             score += 0.2
-        if product_id == "cont_copii" and profile.has_children:
+        if product_id == "cont_junior_adolescenti" and profile.has_children:
             score += 0.2
-        if product_id == "credit_imobiliar" and 25 <= profile.age <= 45:
+        if product_id == "credit_ipotecar_casa_ta" and 25 <= profile.age <= 45:
             score += 0.1
 
     # Risk tolerance
     if profile.risk_tolerance:
         rt = profile.risk_tolerance.lower()
-        if product_id in {"depozite_termen", "cont_economii"} and rt in {"scăzută", "scazuta"}:
+        if product_id in {"depozite_termen", "cont_economii_super_acces"} and rt in {"scăzută", "scazuta", "low"}:
             score += 0.2
-        if product_id == "investitii_fonduri" and rt in {"ridicată", "ridicata"}:
+        if product_id == "fonduri_investitii_smartinvest" and rt in {"ridicată", "ridicata", "high"}:
             score += 0.2
 
     # Financial goals
     if profile.financial_goals:
         goals = {g.lower() for g in profile.financial_goals}
-        if product_id == "credit_imobiliar" and any(
-            goal in goals for goal in ["cumpărare casă", "cumparare casa", "cumparare casă"]
+        if product_id == "credit_ipotecar_casa_ta" and any(
+            goal in goals for goal in ["cumpărare casă", "cumparare casa", "cumparare casă", "casa", "casă", "home"]
         ):
             score += 0.25
-        if product_id == "cont_economii" and "economii" in " ".join(goals):
+        if product_id == "cont_economii_super_acces" and "economii" in " ".join(goals):
             score += 0.15
-        if product_id == "depozite_termen" and "economii pe termen lung" in goals:
+        if product_id == "depozite_termen" and "economii pe termen lung" in " ".join(goals):
             score += 0.1
-        if product_id == "pensie_privata" and "pensionare" in goals:
+        if product_id == "pensie_privata_pilon3" and "pensionare" in " ".join(goals):
             score += 0.15
 
     # Income-based scoring
     if profile.annual_income is not None:
-        if product_id == "card_debit" and profile.annual_income >= 120_000:
+        if product_id == "card_debit_platinum" and profile.annual_income >= 120_000:
             score += 0.1
-        if product_id == "credit_imobiliar" and profile.annual_income >= 60_000:
+        if product_id == "credit_ipotecar_casa_ta" and profile.annual_income >= 60_000:
             score += 0.1
 
     return max(0.0, min(score, 1.0))
