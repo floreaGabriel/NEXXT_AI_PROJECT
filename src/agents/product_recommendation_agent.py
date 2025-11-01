@@ -3,6 +3,7 @@
 from agents import Agent, function_tool
 from typing import Annotated
 from pydantic import BaseModel
+import json
 from src.config.settings import (
     build_default_litellm_model,
 )
@@ -17,7 +18,7 @@ class UserProfile(BaseModel):
     has_children: bool = False
     risk_tolerance: str | None = None  # low, medium, high
     financial_goals: list[str] = []  # e.g., ["savings", "investment", "home_purchase"]
-
+    
 
 class ProductRecommendationContext(BaseModel):
     """Context for product recommendation operations."""
@@ -25,9 +26,8 @@ class ProductRecommendationContext(BaseModel):
     session_id: str | None = None
 
 
-@function_tool
-def get_raiffeisen_products() -> str:
-    """Get the complete list of available Raiffeisen Bank products."""
+def _get_products_catalog_dict() -> dict:
+    """Internal helper: return products catalog as dict."""
     products = {
         "carduri_cumparaturi": {
             "name": "Card de Cumpărături",
@@ -90,7 +90,62 @@ def get_raiffeisen_products() -> str:
             "target_audience": "Clienți cu familie care doresc protecție financiară"
         }
     }
-    return str(products)
+    return products
+
+
+@function_tool
+def get_raiffeisen_products() -> str:
+    """FunctionTool: Get the complete list of available Raiffeisen Bank products as JSON string."""
+    return str(_get_products_catalog_dict())
+
+
+def _calculate_product_score_internal(product_id: str, profile: UserProfile) -> float:
+    """Internal scoring logic. Computes relevance score [0..1] for a product given user profile.
+    
+    TODO: Replace with ML model (sklearn) or fetch from database/API.
+    Currently uses rule-based heuristics.
+    """
+    score = 0.5
+
+    # Age-based scoring
+    if profile.age is not None:
+        if product_id == "pensie_privata" and profile.age >= 40:
+            score += 0.2
+        if product_id == "cont_copii" and profile.has_children:
+            score += 0.2
+        if product_id == "credit_imobiliar" and 25 <= profile.age <= 45:
+            score += 0.1
+
+    # Risk tolerance
+    if profile.risk_tolerance:
+        rt = profile.risk_tolerance.lower()
+        if product_id in {"depozite_termen", "cont_economii"} and rt in {"scăzută", "scazuta"}:
+            score += 0.2
+        if product_id == "investitii_fonduri" and rt in {"ridicată", "ridicata"}:
+            score += 0.2
+
+    # Financial goals
+    if profile.financial_goals:
+        goals = {g.lower() for g in profile.financial_goals}
+        if product_id == "credit_imobiliar" and any(
+            goal in goals for goal in ["cumpărare casă", "cumparare casa", "cumparare casă"]
+        ):
+            score += 0.25
+        if product_id == "cont_economii" and "economii" in " ".join(goals):
+            score += 0.15
+        if product_id == "depozite_termen" and "economii pe termen lung" in goals:
+            score += 0.1
+        if product_id == "pensie_privata" and "pensionare" in goals:
+            score += 0.15
+
+    # Income-based scoring
+    if profile.annual_income is not None:
+        if product_id == "card_debit" and profile.annual_income >= 120_000:
+            score += 0.1
+        if product_id == "credit_imobiliar" and profile.annual_income >= 60_000:
+            score += 0.1
+
+    return max(0.0, min(score, 1.0))
 
 
 @function_tool
@@ -98,58 +153,62 @@ def calculate_product_score(
     product_id: Annotated[str, "Product identifier"],
     user_profile: Annotated[str, "JSON string of user profile data"],
 ) -> float:
-    """Calculate relevance score for a product based on user profile."""
-    # TODO: Implement ML-based scoring with sklearn
-    # This is a placeholder that returns a sample score
-    # In production, this would use a trained model or rule-based system
+    """FunctionTool: Calculate relevance score for a product based on user profile."""
+    profile = UserProfile.model_validate_json(user_profile)
+    return _calculate_product_score_internal(product_id, profile)
+
+
+def rank_products_for_profile(user_profile_json: str) -> list[dict]:
+    """MAIN RANKING FUNCTION: Rank all products based on user profile.
     
-    # Sample scoring logic (to be replaced with ML model)
-    base_score = 0.5
+    This is the core output of the Product Recommendation Agent. It returns
+    a list of products sorted by relevance score (highest first).
     
-    # Income-based scoring
-    if "annual_income" in user_profile:
-        if "premium" in product_id.lower() and "high" in user_profile:
-            base_score += 0.2
-        if "savings" in product_id.lower() and "medium" in user_profile:
-            base_score += 0.15
+    Args:
+        user_profile_json: JSON string of UserProfile
     
-    # Age-based scoring
-    if "age" in user_profile:
-        if "pension" in product_id.lower():
-            base_score += 0.25
-        if "junior" in product_id.lower() and "children" in user_profile:
-            base_score += 0.3
+    Returns:
+        List of dicts with keys: product_id, score
+        Sorted descending by score (most relevant first)
     
-    return min(base_score, 1.0)
+    Example output:
+        [
+            {"product_id": "cont_economii", "score": 0.85},
+            {"product_id": "depozite_termen", "score": 0.75},
+            ...
+        ]
+    
+    TODO: Replace rule-based scoring with:
+    - ML model (sklearn, lightgbm, etc.)
+    - Collaborative filtering based on similar users
+    - Fetch scores from database/API
+    - A/B test different ranking strategies
+    """
+    profile = UserProfile.model_validate_json(user_profile_json)
+    catalog = _get_products_catalog_dict()
+    
+    # Score all products
+    scored_products = []
+    for product_id in catalog.keys():
+        score = _calculate_product_score_internal(product_id, profile)
+        scored_products.append({
+            "product_id": product_id,
+            "score": round(score, 3),
+        })
+    
+    # Sort by score descending (highest relevance first)
+    scored_products.sort(key=lambda x: x["score"], reverse=True)
+    
+    return scored_products
 
 
 @function_tool
 def rank_products_for_user(
     user_profile_json: Annotated[str, "JSON representation of user profile"],
 ) -> str:
-    """Rank all products based on user profile and return ordered list."""
-    # TODO: Implement actual ranking algorithm with sklearn
-    # This would typically use collaborative filtering, content-based filtering,
-    # or a hybrid approach
-    
-    products = [
-        "carduri_cumparaturi",
-        "depozite_termen", 
-        "cont_economii",
-        "card_debit",
-        "credit_imobiliar",
-        "credit_nevoi_personale",
-        "investitii_fonduri",
-        "pensie_privata",
-        "cont_copii",
-        "asigurare_viata"
-    ]
-    
-    # Placeholder ranking (in production, use ML model)
-    # This returns a comma-separated list of product IDs in recommended order
-    ranked = ",".join(products)
-    
-    return f"Recommended order: {ranked}"
+    """FunctionTool: Rank all products and return as JSON string."""
+    ranked = rank_products_for_profile(user_profile_json)
+    return json.dumps(ranked, ensure_ascii=False)
 
 
 @function_tool
