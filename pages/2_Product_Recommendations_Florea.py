@@ -623,16 +623,42 @@ FROM_EMAIL: {from_email}
                             st.write("**🤖 Apelare AI Agent pentru generare email...**")
 
                         async def _send():
-                            return await Runner.run(email_summary_agent, prompt)
+                            """Trimite email folosind MCP Email Server cu conexiune explicită."""
+                            from agents.mcp import MCPServerStdio
+                            from src.utils.mcp_email_client import get_mcp_email_server_config
+                            from src.config.settings import build_default_litellm_model
+                            from agents import Agent, ModelSettings
+                            
+                            # Creează și conectează MCP serverul
+                            mcp_server = MCPServerStdio(get_mcp_email_server_config())
+                            await mcp_server.connect()
+                            
+                            # Creează agent cu MCP server conectat
+                            temp_agent = Agent(
+                                name="Email Summary Sender",
+                                instructions=email_summary_agent.instructions,
+                                mcp_servers=[mcp_server],
+                                model=build_default_litellm_model(),
+                                model_settings=ModelSettings(include_usage=True),
+                            )
+                            
+                            # Rulează agentul
+                            return await Runner.run(temp_agent, prompt)
 
                         with log_expander:
-                            st.write("**📤 Trimitere email prin SMTP...**")
+                            st.write("**📤 Trimitere email prin MCP Server...**")
                         
                         send_result = asyncio.run(_send())
                         
                         with log_expander:
                             st.write("**✅ Răspuns Agent:**")
-                            st.json(send_result.model_dump() if hasattr(send_result, 'model_dump') else str(send_result))
+                            # Afișează rezultatul corect (nu JSON parse)
+                            if hasattr(send_result, 'output'):
+                                st.write(send_result.output)
+                            elif hasattr(send_result, 'model_dump'):
+                                st.code(str(send_result.model_dump()), language="python")
+                            else:
+                                st.write(str(send_result))
                         
                         st.success(f"✅ **Email trimis cu succes către: {user_email}**\n\nVerifică inbox-ul (și folder-ul Spam)!")
                         
