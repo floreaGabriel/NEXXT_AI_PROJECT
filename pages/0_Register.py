@@ -28,7 +28,7 @@ col_nav1, col_nav2 = st.columns(2)
 with col_nav1:
     st.page_link("pages/0_Login.py", label="Ai deja cont? Autentifică-te →")
 with col_nav2:
-    st.page_link("pages/1_Product_Recommendations_Sabin.py", label="Recomandări produse →")
+    st.page_link("pages/2_Product_Recommendations_Florea.py", label="Recomandări produse →")
 
 st.divider()
 
@@ -122,6 +122,6 @@ with st.form("register_form", clear_on_submit=False, border=True):
                 except Exception as db_err:
                     st.warning(f"Nu am putut salva în baza de date: {db_err}")
 
-                st.page_link("pages/1_Product_Recommendations_Sabin.py", label="Continuă la Recomandări →")
+                st.page_link("pages/2_Product_Recommendations_Florea.py", label="Continuă la Recomandări →")
 
 st.caption("Demo: înregistrare în memorie, doar pentru testare.")
