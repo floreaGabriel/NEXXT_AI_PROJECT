@@ -29,7 +29,7 @@ from src.agents.user_experience_summary_agent import (
 from src.agents.product_title_generation_agent import product_title_agent
 from src.agents.email_summary_agent import email_summary_agent
 from src.agents.financial_plan_agent import generate_financial_plan, format_plan_for_display
-from src.agents.pdf_converter_agent import convert_markdown_to_pdf
+from src.agents.pdf_converter_direct import convert_markdown_to_pdf_direct
 from src.utils.db import save_financial_plan
 
 apply_button_styling()
@@ -766,8 +766,9 @@ FROM_EMAIL: {from_email}
                                 plan_text = generate_financial_plan(profile_data, selected_products_data)
                                 formatted_plan = format_plan_for_display(plan_text)
                                 
-                                # Store in session state for download
+                                # Store in session state for download and PDF conversion
                                 st.session_state["generated_financial_plan"] = formatted_plan
+                                st.session_state["plan_profile_data"] = profile_data  # Save for PDF filename
                                 
                                 # Save to database if user is logged in
                                 user_email = st.session_state.get("auth", {}).get("email")
@@ -780,65 +781,6 @@ FROM_EMAIL: {from_email}
                                 else:
                                     st.success("✅ **Plan financiar generat cu succes!**")
                                     st.info("ℹ️ **Autentificați-vă pentru a salva planul în contul dumneavoastră.**")
-                                
-                                # Display plan in expandable section
-                                with st.expander("📄 Vizualizare Plan Financiar Complet", expanded=True):
-                                    st.markdown(formatted_plan)
-                                
-                                # Download buttons in columns
-                                col_md, col_pdf = st.columns(2)
-                                
-                                with col_md:
-                                    # Download Markdown button
-                                    st.download_button(
-                                        label="📥 Descarcă Markdown",
-                                        data=formatted_plan,
-                                        file_name=f"plan_financiar_{profile_data.get('first_name', 'client')}_{profile_data.get('last_name', '')}.md",
-                                        mime="text/markdown",
-                                        use_container_width=True,
-                                        type="secondary"
-                                    )
-                                
-                                with col_pdf:
-                                    # Convert to PDF button
-                                    if st.button("📄 Generează PDF", use_container_width=True, type="primary"):
-                                        with st.spinner("⏳ Convertesc planul în PDF..."):
-                                            try:
-                                                # Generate PDF filename
-                                                pdf_filename = f"plan_financiar_{profile_data.get('first_name', 'client')}_{profile_data.get('last_name', '')}.pdf"
-                                                
-                                                # Convert to PDF using MCP Pandoc
-                                                pdf_path, message = convert_markdown_to_pdf(
-                                                    formatted_plan,
-                                                    pdf_filename
-                                                )
-                                                
-                                                st.success(f"✅ {message}")
-                                                st.info(f"📁 Fișierul PDF a fost salvat la: `{pdf_path}`")
-                                                
-                                                # Offer download of the generated PDF
-                                                with open(pdf_path, 'rb') as pdf_file:
-                                                    st.download_button(
-                                                        label="⬇️ Descarcă PDF",
-                                                        data=pdf_file.read(),
-                                                        file_name=pdf_filename,
-                                                        mime="application/pdf",
-                                                        use_container_width=True,
-                                                    )
-                                                
-                                            except RuntimeError as re:
-                                                st.error(f"❌ **Eroare la conversia PDF:** {str(re)}")
-                                                st.warning(
-                                                    "💡 **Asigurați-vă că sunt instalate:**\n"
-                                                    "- `pandoc` (brew install pandoc)\n"
-                                                    "- `texlive` (brew install texlive)\n"
-                                                    "- `mcp-pandoc` (pip install mcp-pandoc)"
-                                                )
-                                            except Exception as e:
-                                                st.error(f"❌ **Eroare neașteptată la conversie:** {str(e)}")
-                                                import traceback
-                                                with st.expander("🔍 Detalii tehnice"):
-                                                    st.code(traceback.format_exc())
                                 
                             except ValueError as ve:
                                 st.error(f"❌ **Eroare de validare:** {str(ve)}")
@@ -854,6 +796,158 @@ FROM_EMAIL: {from_email}
             if st.button("🗑️ Șterge Selecția", type="secondary", use_container_width=True):
                 st.session_state.selected_products = []
                 st.rerun()
+
+# ============================================================================
+# SECȚIUNE: AFIȘARE PLAN FINANCIAR GENERAT (PERSISTENT)
+# ============================================================================
+if "generated_financial_plan" in st.session_state and st.session_state["generated_financial_plan"]:
+    st.divider()
+    st.header("📋 Plan Financiar Generat")
+    
+    # Display the financial plan
+    with st.expander("📄 Vizualizare Plan Financiar Complet", expanded=True):
+        st.markdown(st.session_state["generated_financial_plan"])
+    
+    # Action buttons
+    col_download_md, col_convert_pdf = st.columns(2)
+    
+    with col_download_md:
+        # Download Markdown button
+        profile_data = st.session_state.get("plan_profile_data", {})
+        st.download_button(
+            label="📥 Descarcă Markdown",
+            data=st.session_state["generated_financial_plan"],
+            file_name=f"plan_financiar_{profile_data.get('first_name', 'client')}_{profile_data.get('last_name', '')}.md",
+            mime="text/markdown",
+            use_container_width=True,
+            type="secondary",
+            key="download_md_persistent"
+        )
+    
+    with col_convert_pdf:
+        # Convert to PDF button
+        if st.button("📄 Generează PDF", use_container_width=True, type="primary", key="generate_pdf_persistent"):
+            st.session_state["pdf_conversion_running"] = True
+            st.rerun()
+
+# ============================================================================
+# SECȚIUNE: PROCESARE CONVERSIE PDF (DACĂ ESTE ACTIVĂ)
+# ============================================================================
+if st.session_state.get("pdf_conversion_running", False):
+    st.divider()
+    st.header("🔄 Conversie Markdown → PDF")
+    
+    # Create containers for logs and results
+    log_container = st.container()
+    result_container = st.container()
+    
+    with log_container:
+        st.subheader("📋 Log Conversie în Timp Real")
+        log_area = st.empty()
+    
+    with result_container:
+        st.subheader("📊 Rezultat Conversie")
+        result_area = st.empty()
+    
+    try:
+        # Get data from session state
+        formatted_plan = st.session_state["generated_financial_plan"]
+        profile_data = st.session_state.get("plan_profile_data", {})
+        pdf_filename = f"plan_financiar_{profile_data.get('first_name', 'client')}_{profile_data.get('last_name', '')}.pdf"
+        
+        # Collect logs in session state for display
+        if "pdf_logs" not in st.session_state:
+            st.session_state["pdf_logs"] = []
+        
+        def progress_callback(message):
+            """Callback to capture logs in real-time."""
+            st.session_state["pdf_logs"].append(message)
+            # Display all logs so far
+            with log_area.container():
+                st.info("🔄 **Conversie în progres...**")
+                for log_msg in st.session_state["pdf_logs"]:
+                    st.text(log_msg)
+        
+        with st.spinner("⏳ Convertesc planul în PDF..."):
+            # Convert to PDF using direct pypandoc (fast, no timeout issues)
+            pdf_path, message, logs = convert_markdown_to_pdf_direct(
+                formatted_plan,
+                pdf_filename,
+                progress_callback=progress_callback
+            )
+        
+        # Conversion successful!
+        with log_area.container():
+            st.success("✅ **Conversie completă!**")
+            with st.expander("📋 Vezi Log Complet Conversie", expanded=False):
+                for log in logs:
+                    st.code(log, language=None)
+        
+        with result_area.container():
+            st.success(f"✅ **{message}**")
+            st.info(f"📁 **Locație fișier:** `{pdf_path}`")
+            
+            # Get file info
+            from pathlib import Path
+            file_size = Path(pdf_path).stat().st_size
+            st.metric("📊 Dimensiune PDF", f"{file_size/1024:.1f} KB")
+            
+            # Offer download
+            with open(pdf_path, 'rb') as pdf_file:
+                st.download_button(
+                    label="⬇️ Descarcă PDF Generat",
+                    data=pdf_file.read(),
+                    file_name=pdf_filename,
+                    mime="application/pdf",
+                    use_container_width=True,
+                    type="primary",
+                    key="download_pdf_final"
+                )
+            
+            st.info("💡 **Tip:** Poți regenera PDF-ul oricând apăsând din nou butonul 'Generează PDF'")
+        
+        # Reset conversion flag
+        st.session_state["pdf_conversion_running"] = False
+        st.session_state["pdf_logs"] = []
+        
+    except RuntimeError as re:
+        with log_area.container():
+            st.error("❌ **Eroare în timpul conversiei**")
+            if st.session_state.get("pdf_logs"):
+                with st.expander("📋 Log până la eroare", expanded=True):
+                    for log in st.session_state["pdf_logs"]:
+                        st.code(log, language=None)
+        
+        with result_area.container():
+            st.error(f"❌ **Eroare la conversia PDF:** {str(re)}")
+            st.warning(
+                "💡 **Asigurați-vă că sunt instalate:**\n"
+                "- `pandoc` (brew install pandoc)\n"
+                "- `texlive` (brew install texlive)\n"
+                "- `mcp-pandoc` (pip install mcp-pandoc)"
+            )
+        
+        # Reset conversion flag
+        st.session_state["pdf_conversion_running"] = False
+        st.session_state["pdf_logs"] = []
+        
+    except Exception as e:
+        with log_area.container():
+            st.error("❌ **Eroare neașteptată**")
+            if st.session_state.get("pdf_logs"):
+                with st.expander("📋 Log până la eroare", expanded=True):
+                    for log in st.session_state["pdf_logs"]:
+                        st.code(log, language=None)
+        
+        with result_area.container():
+            st.error(f"❌ **Eroare neașteptată la conversie:** {str(e)}")
+            import traceback
+            with st.expander("🔍 Detalii Tehnice Complete", expanded=True):
+                st.code(traceback.format_exc())
+        
+        # Reset conversion flag
+        st.session_state["pdf_conversion_running"] = False
+        st.session_state["pdf_logs"] = []
 
 # Information sidebar
 with st.sidebar:
