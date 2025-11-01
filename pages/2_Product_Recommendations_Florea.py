@@ -1,12 +1,29 @@
-"""Product Recommendations page - Personalized banking product recommendations."""
+"""Product Recommendations page - Personalized banking product recommendations.
+
+Flow:
+1. Rank products by relevance (Product Recommendation Agent)
+2. Get NLP-generated base summaries (English)
+3. Personalize summaries for user profile (Summary Personalization Agent)
+4. Display personalized content to user
+"""
 
 import streamlit as st
+import asyncio
+import json
+from agents import Runner
+import nest_asyncio
+import concurrent.futures
+
 from src.config.settings import AWS_BEDROCK_API_KEY
 from src.components.ui_components import render_sidebar_info, apply_button_styling
 from src.agents.product_recommendation_agent import (
-    product_recommendation_orchestrator,
-    ProductRecommendationContext,
     UserProfile,
+    rank_products_for_profile,  # Direct function for ranking
+)
+from src.agents.user_experience_summary_agent import (
+    personalization_orchestrator,
+    PersonalizationContext,
+    personalize_products_batch,  # Direct function for personalization
 )
 
 apply_button_styling()
@@ -22,6 +39,82 @@ st.write(
 )
 
 st.divider()
+
+
+# --- Product Catalog with Base English Summaries (from NLP stage) ---
+# In production, these would come from a database or NLP summarization service
+PRODUCT_BASE_SUMMARIES = {
+    "carduri_cumparaturi": {
+        "name": "Shopping Credit Card",
+        "name_ro": "Card de Cumpărături",
+        "description": "Card de credit special pentru cumpărături cu rate fixe și fără dobândă",
+        "base_summary": "Special credit card offering interest-free installment plans at partner merchants, with cashback rewards up to 5% and comprehensive purchase protection insurance.",
+        "benefits": ["Rate fără dobândă la parteneri", "Cashback până la 5%", "Asigurare achizitii"],
+    },
+    "depozite_termen": {
+        "name": "Fixed-Term Deposit",
+        "name_ro": "Depozit la Termen",
+        "description": "Depozit bancar cu dobândă fixă și garantată",
+        "base_summary": "Bank deposit with guaranteed fixed interest rates, offering competitive returns with full capital protection across flexible terms from 1 to 60 months.",
+        "benefits": ["Dobânzi competitive", "Sumă garantată", "Diverse perioade (1-60 luni)"],
+    },
+    "cont_economii": {
+        "name": "Savings Account",
+        "name_ro": "Cont de Economii",
+        "description": "Cont flexibil de economii cu acces rapid la fonduri",
+        "base_summary": "Flexible savings account providing variable interest rates with instant access to your funds and no withdrawal penalties or administration fees.",
+        "benefits": ["Dobândă variabilă", "Retragere fără penalizări", "Fără comision administrare"],
+    },
+    "card_debit": {
+        "name": "Premium Debit Card",
+        "name_ro": "Card de Debit Premium",
+        "description": "Card de debit cu beneficii extinse și asigurări incluse",
+        "base_summary": "Premium debit card featuring 2% cashback on purchases, comprehensive travel insurance coverage, and exclusive access to airport lounges worldwide.",
+        "benefits": ["Cashback 2%", "Asigurare călătorii", "Acces lounge aeroporturi"],
+    },
+    "credit_imobiliar": {
+        "name": "Mortgage Loan",
+        "name_ro": "Credit Imobiliar",
+        "description": "Împrumut pentru achiziție sau refinanțare locuință",
+        "base_summary": "Mortgage financing for home purchase or refinancing with competitive interest rates, terms up to 30 years, and flexible down payment options including 0% advance possibilities.",
+        "benefits": ["Dobândă competitivă", "Perioadă până la 30 ani", "Posibilitate avans 0%"],
+    },
+    "credit_nevoi_personale": {
+        "name": "Personal Loan",
+        "name_ro": "Credit Nevoi Personale",
+        "description": "Împrumut rapid pentru orice scop",
+        "base_summary": "Fast-approval personal loan for any purpose, with no collateral required for amounts up to 50,000 RON and flexible repayment schedules.",
+        "benefits": ["Aprobare rapidă", "Fără garanții până la 50.000 RON", "Rată flexibilă"],
+    },
+    "investitii_fonduri": {
+        "name": "Investment Funds",
+        "name_ro": "Fonduri de Investiții",
+        "description": "Portofolii diversificate de investiții gestionate profesional",
+        "base_summary": "Professionally managed investment portfolios offering diversified risk exposure across multiple strategies to optimize long-term returns.",
+        "benefits": ["Diversificare risc", "Gestiune profesională", "Multiple strategii"],
+    },
+    "pensie_privata": {
+        "name": "Private Pension (Pillar III)",
+        "name_ro": "Pensie Privată (Pilon III)",
+        "description": "Plan de economii pe termen lung pentru pensie",
+        "base_summary": "Long-term retirement savings plan with tax advantages, flexible contribution options, and professionally managed portfolios designed for sustainable long-term growth.",
+        "benefits": ["Avantaje fiscale", "Contribuții flexibile", "Randament pe termen lung"],
+    },
+    "cont_copii": {
+        "name": "Junior Account",
+        "name_ro": "Cont Junior",
+        "description": "Cont de economii special pentru copii",
+        "base_summary": "Specialized savings account for children with enhanced interest rates, financial education resources, and optional debit card for teenagers to develop money management skills.",
+        "benefits": ["Dobândă bonificată", "Educație financiară", "Card pentru adolescenți"],
+    },
+    "asigurare_viata": {
+        "name": "Life Insurance",
+        "name_ro": "Asigurare de Viață",
+        "description": "Protecție financiară pentru familie",
+        "base_summary": "Comprehensive life insurance providing financial protection for your family with optional investment components and tax-deductible premiums.",
+        "benefits": ["Protecție financiară", "Opțiuni investiționale", "Deducere fiscală"],
+    }
+}
 
 # User Profile Input Section
 st.subheader("📋 Profilul Dumneavoastră")
@@ -94,9 +187,11 @@ if st.button("🔍 Obține Recomandări", type="primary", use_container_width=Tr
     if not AWS_BEDROCK_API_KEY:
         st.error("Vă rugăm configurați cheia API Bedrock (AWS_BEARER_TOKEN_BEDROCK) în fișierul .env")
     else:
-        with st.spinner("Analizăm profilul și generăm recomandări personalizate..."):
+
+        with st.spinner("Analizăm profilul și generăm recomandări personalizate prin AI..."):
             try:
                 # Create user profile
+                # TODO: In production, fetch user data from database based on user_id
                 user_profile = UserProfile(
                     marital_status=marital_status.lower(),
                     annual_income=float(annual_income),
@@ -107,71 +202,178 @@ if st.button("🔍 Obține Recomandări", type="primary", use_container_width=Tr
                     financial_goals=[goal.lower() for goal in financial_goals],
                 )
                 
-                # TODO: Implement actual agent execution
-                # context = ProductRecommendationContext(user_profile=user_profile)
-                # result = await Runner.run(
-                #     product_recommendation_orchestrator,
-                #     f"Recommend products for this user profile: {user_profile.model_dump_json()}",
-                #     context=context,
-                # )
+                # STEP 1: Product Recommendation Agent - Rank products by relevance score
+                # Uses deterministic rule-based scoring (TODO: replace with ML model)
+                ranked_products = rank_products_for_profile(user_profile.model_dump_json())
                 
-                # Placeholder: Mock ranking based on simple rules
-                products_data = {
-                    "cont_economii": {
-                        "name": "Cont de Economii",
-                        "icon": "💰",
-                        "description": "Cont flexibil de economii cu acces rapid la fonduri",
-                        "benefits": ["Dobândă variabilă", "Retragere fără penalizări", "Fără comision administrare"],
-                        "score": 0.95
-                    },
-                    "depozite_termen": {
-                        "name": "Depozit la Termen",
-                        "icon": "🏦",
-                        "description": "Depozit bancar cu dobândă fixă și garantată",
-                        "benefits": ["Dobânzi competitive", "Sumă garantată", "Diverse perioade (1-60 luni)"],
-                        "score": 0.90
-                    },
-                    "carduri_cumparaturi": {
-                        "name": "Card de Cumpărături",
-                        "icon": "💳",
-                        "description": "Card de credit special pentru cumpărături cu rate fixe și fără dobândă",
-                        "benefits": ["Rate fără dobândă la parteneri", "Cashback până la 5%", "Asigurare achiziții"],
-                        "score": 0.85
-                    },
-                    "pensie_privata": {
-                        "name": "Pensie Privată (Pilon III)",
-                        "icon": "🎯",
-                        "description": "Plan de economii pe termen lung pentru pensie",
-                        "benefits": ["Avantaje fiscale", "Contribuții flexibile", "Randament pe termen lung"],
-                        "score": 0.80
-                    },
-                    "credit_imobiliar": {
-                        "name": "Credit Imobiliar",
-                        "icon": "🏠",
-                        "description": "Împrumut pentru achiziție sau refinanțare locuință",
-                        "benefits": ["Dobândă competitivă", "Perioadă până la 30 ani", "Posibilitate avans 0%"],
-                        "score": 0.75
-                    },
+                # STEP 2: Attach base English summaries from NLP stage
+                # In production, these would come from a separate NLP summarization service
+                products_with_base_summaries = []
+                for product in ranked_products:
+                    pid = product["product_id"]
+                    base_data = PRODUCT_BASE_SUMMARIES.get(pid, {})
+                    
+                    products_with_base_summaries.append({
+                        "product_id": pid,
+                        "name": base_data.get("name", pid),
+                        "name_ro": base_data.get("name_ro", pid),
+                        "description": base_data.get("description", ""),
+                        "base_summary": base_data.get("base_summary", "Banking product with various benefits."),
+                        "benefits": base_data.get("benefits", []),
+                        "score": product["score"],
+                    })
+                
+                # STEP 3: Summary Personalization Agent - Personalize English summaries for user
+                # Uses Bedrock LLM to adapt base summaries to user's specific situation
+                nest_asyncio.apply()
+                
+                context = PersonalizationContext(user_profile=user_profile)
+                
+                async def run_personalization_agent():
+                    # Build detailed prompt for each product
+                    personalization_requests = []
+                    for product in products_with_base_summaries:
+                        user_context_parts = []
+                        
+                        # Build user context description
+                        if user_profile.age is not None:
+                            if user_profile.age < 30:
+                                user_context_parts.append("young professional starting financial journey")
+                            elif user_profile.age < 45:
+                                user_context_parts.append("established professional managing responsibilities")
+                            else:
+                                user_context_parts.append("experienced individual planning long-term security")
+                        
+                        if user_profile.has_children:
+                            user_context_parts.append("parent with family responsibilities")
+                        
+                        if user_profile.risk_tolerance:
+                            rt = user_profile.risk_tolerance.lower()
+                            if "low" in rt or "scăzută" in rt or "scazuta" in rt:
+                                user_context_parts.append("preferring stable, low-risk solutions")
+                            elif "high" in rt or "ridicată" in rt or "ridicata" in rt:
+                                user_context_parts.append("comfortable with growth-oriented strategies")
+                        
+                        user_context = ", ".join(user_context_parts) if user_context_parts else "seeking financial solutions"
+                        
+                        relevance_tone = "excellent match" if product["score"] >= 0.8 else "strong fit" if product["score"] >= 0.6 else "potential option"
+                        
+                        personalization_requests.append({
+                            "product_id": product["product_id"],
+                            "product_name": product["name"],
+                            "base_summary": product["base_summary"],
+                            "user_context": user_context,
+                            "relevance_tone": relevance_tone,
+                        })
+                    
+                    # Call LLM for personalization
+                    prompt = f"""Personalize these banking product summaries for the user profile.
+
+User Profile:
+- Age: {user_profile.age}
+- Income: {user_profile.annual_income} RON/year
+- Marital Status: {user_profile.marital_status}
+- Has Children: {user_profile.has_children}
+- Risk Tolerance: {user_profile.risk_tolerance}
+- Financial Goals: {', '.join(user_profile.financial_goals)}
+
+Products to personalize:
+{json.dumps(personalization_requests, indent=2)}
+
+CRITICAL INSTRUCTIONS:
+1. For each product, create a personalized English summary (2-3 sentences max)
+2. PRESERVE all facts from base_summary - do NOT add features or benefits
+3. ADJUST language and tone to resonate with user_context
+4. Use relevance_tone to modulate enthusiasm
+5. Connect product features to user's life situation naturally
+6. Maintain professional banking language
+
+Return ONLY a JSON array with this exact structure:
+[
+  {{"product_id": "...", "personalized_summary": "..."}},
+  ...
+]"""
+
+                    result = await Runner.run(
+                        personalization_orchestrator,
+                        prompt,
+                        context=context,
+                    )
+                    return result
+                
+                # Execute personalization agent
+                with concurrent.futures.ThreadPoolExecutor() as executor:
+                    future = executor.submit(asyncio.run, run_personalization_agent())
+                    agent_result = future.result()
+                
+                # Parse LLM output
+                agent_output = agent_result.output if hasattr(agent_result, 'output') else str(agent_result)
+                
+                try:
+                    import re
+                    # Extract JSON array from LLM response
+                    json_match = re.search(r'\[.*?\]', agent_output, re.DOTALL)
+                    if json_match:
+                        personalized_summaries = json.loads(json_match.group())
+                        
+                        # Merge personalized summaries back into products
+                        summary_map = {item["product_id"]: item["personalized_summary"] for item in personalized_summaries}
+                        
+                        for product in products_with_base_summaries:
+                            product["personalized_summary"] = summary_map.get(
+                                product["product_id"],
+                                product["base_summary"]  # Fallback to base if LLM didn't personalize
+                            )
+                    else:
+                        st.warning("⚠️ LLM didn't return valid JSON. Using base summaries.")
+                        for product in products_with_base_summaries:
+                            product["personalized_summary"] = product["base_summary"]
+                            
+                except Exception as e:
+                    st.warning(f"⚠️ Error parsing LLM response: {e}. Using base summaries.")
+                    for product in products_with_base_summaries:
+                        product["personalized_summary"] = product["base_summary"]
+                
+                enriched_products = products_with_base_summaries
+
+                # Prepare UI data: add icons and format for display
+                ICONS = {
+                    "carduri_cumparaturi": "💳",
+                    "depozite_termen": "🏦",
+                    "cont_economii": "💰",
+                    "card_debit": "🪪",
+                    "credit_imobiliar": "🏠",
+                    "credit_nevoi_personale": "🧾",
+                    "investitii_fonduri": "📈",
+                    "pensie_privata": "🎯",
+                    "cont_copii": "🧒",
+                    "asigurare_viata": "🛡️",
                 }
+
+                # Format for UI
+                products_for_ui = []
+                for enriched_product in enriched_products:
+                    pid = enriched_product["product_id"]
+                    icon = ICONS.get(pid, "🏦")
+                    
+                    products_for_ui.append(
+                        (
+                            pid,
+                            {
+                                "name_en": enriched_product.get("name", pid),
+                                "name_ro": enriched_product.get("name_ro", pid),
+                                "icon": icon,
+                                "description": enriched_product.get("description", ""),
+                                "benefits": enriched_product.get("benefits", []),
+                                "score": enriched_product["score"],
+                                "base_summary": enriched_product.get("base_summary", ""),
+                                "personalized_summary": enriched_product.get("personalized_summary", ""),
+                            },
+                        )
+                    )
                 
-                # Simple rule-based ranking (to be replaced with ML model)
-                ranked_products = list(products_data.items())
-                
-                # Adjust scores based on profile
-                for product_id, product in ranked_products:
-                    if product_id == "cont_copii" and has_children:
-                        product["score"] += 0.15
-                    if product_id == "pensie_privata" and age > 40:
-                        product["score"] += 0.10
-                    if product_id == "credit_imobiliar" and "cumpărare casă" in [g.lower() for g in financial_goals]:
-                        product["score"] += 0.20
-                    if product_id == "investitii_fonduri" and risk_tolerance == "Ridicată":
-                        product["score"] += 0.15
-                    if product_id == "depozite_termen" and risk_tolerance == "Scăzută":
-                        product["score"] += 0.10
-                
-                # Sort by score
-                ranked_products.sort(key=lambda x: x[1]["score"], reverse=True)
+                # Already sorted by Product Recommendation Agent (no need to re-sort)
+                ranked_products = products_for_ui
                 
                 # Display results
                 st.success("✅ Recomandări generate cu succes!")
@@ -181,7 +383,7 @@ if st.button("🔍 Obține Recomandări", type="primary", use_container_width=Tr
                 
                 # Display match score
                 st.info(f"📈 Bazat pe profilul dumneavoastră: {age} ani, venit anual {annual_income:,.0f} RON, {marital_status.lower()}")
-                
+
                 # Display products in ranked order
                 for idx, (product_id, product) in enumerate(ranked_products, 1):
                     with st.container(border=True):
@@ -190,15 +392,27 @@ if st.button("🔍 Obține Recomandări", type="primary", use_container_width=Tr
                         with col_icon:
                             st.markdown(f"## {product['icon']}")
                         with col_title:
-                            st.markdown(f"### {idx}. {product['name']}")
+                            # Show Romanian name for UI, English name below
+                            st.markdown(f"### {idx}. {product['name_ro']}")
+                            st.caption(f"_{product['name_en']}_")
                             # Match percentage
                             match_percent = int(product['score'] * 100)
                             st.progress(product['score'], text=f"Potrivire: {match_percent}%")
                         
-                        # Product description
+
+                        # Romanian product description
                         st.write(product['description'])
                         
-                        # Benefits
+                        # Personalized English summary (AI-generated based on user profile)
+                        if product.get("personalized_summary"):
+                            st.markdown("**💡 Personalized for You:**")
+                            st.info(product["personalized_summary"])
+                            
+                            # Show base summary in expander for comparison
+                            with st.expander("📄 View base product summary"):
+                                st.write(product.get("base_summary", ""))
+
+                        # Benefits (Romanian)
                         st.markdown("**Beneficii principale:**")
                         for benefit in product['benefits']:
                             st.markdown(f"- ✓ {benefit}")
@@ -207,7 +421,7 @@ if st.button("🔍 Obține Recomandări", type="primary", use_container_width=Tr
                         col_learn, col_apply = st.columns(2)
                         with col_learn:
                             st.button(
-                                f"📖 Detalii {product['name']}", 
+                                f"📖 Detalii {product['name_ro']}", 
                                 key=f"learn_{product_id}",
                                 use_container_width=True
                             )

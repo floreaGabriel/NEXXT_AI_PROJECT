@@ -15,7 +15,8 @@ _os.environ.pop("OPENAI_API_KEY", None)
 
 # API Configuration
 # Legacy support (some pages may still reference this)
-OPENAI_API_KEY = None  # explicitly unused
+
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 # Primary model API key: AWS Bedrock via LiteLLM
 # Expected to be provided in .env as AWS_BEARER_TOKEN_BEDROCK

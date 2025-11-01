@@ -1,10 +1,6 @@
-"""Product Recommendations page - Personalized banking product recommendations.
-
-Adds personalized product title generation powered by the Product Title Agent.
-"""
-
 import asyncio
 import json
+
 import streamlit as st
 from src.config.settings import AWS_BEDROCK_API_KEY
 from src.components.ui_components import render_sidebar_info, apply_button_styling
@@ -13,6 +9,7 @@ from src.agents.product_recommendation_agent import (
     ProductRecommendationContext,
     UserProfile,
 )
+
 from agents import Runner
 from src.agents.product_title_generation_agent import product_title_agent
 
@@ -35,6 +32,7 @@ with nav_col3:
             st.session_state.pop("user_profile", None)
             st.rerun()
         st.caption(f"Autentificat ca: {email}")
+
 
 st.write(
     """
@@ -275,6 +273,7 @@ if st.button("🔍 Obține Recomandări", type="primary", use_container_width=Tr
                 except Exception as llm_err:
                     st.warning(f"Nu am putut genera titluri personalizate (LLM): {llm_err}")
 
+
                 # Display products in ranked order
                 for idx, (product_id, product) in enumerate(ranked_products, 1):
                     with st.container(border=True):
@@ -285,6 +284,7 @@ if st.button("🔍 Obține Recomandări", type="primary", use_container_width=Tr
                         with col_title:
                             display_name = llm_titles.get(product_id, product['name'])
                             st.markdown(f"### {idx}. {display_name}")
+
                             # Match percentage
                             match_percent = int(product['score'] * 100)
                             st.progress(product['score'], text=f"Potrivire: {match_percent}%")
