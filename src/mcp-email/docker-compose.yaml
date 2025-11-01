@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  mcp-email:
+    build: .
+    container_name: mcp-email-server
+    environment:
+      - SMTP_HOST=${SMTP_HOST}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USER=${SMTP_USER}
+      - SMTP_PASSWORD=${SMTP_PASSWORD}
+      - SMTP_TLS=${SMTP_TLS:-true}
+      - FROM_EMAIL=${FROM_EMAIL}
+    stdin_open: true
+    tty: true
+    restart: unless-stopped

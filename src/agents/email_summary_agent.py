@@ -1,22 +1,13 @@
 """Email Summary Agent - drafts and sends personalized product summaries via email.
 
 This agent composes a Romanian email (no emojis) tailored to the user's profile
-and product recommendations, then sends it using an SMTP tool.
+and product recommendations, then sends it using the MCP Email Server.
 """
 
-from agents import Agent, function_tool, ModelSettings  # type: ignore
+from agents import Agent, ModelSettings  # type: ignore
+from agents.mcp import MCPServerStdio
 from src.config.settings import build_default_litellm_model
-from src.utils.emailer import send_email as _send_email
-
-
-@function_tool
-def send_email(
-    to: str,
-    subject: str,
-    body: str,
-) -> str:
-    """Send an email via SMTP to the given recipient and return 'sent' on success."""
-    return _send_email(to=to, subject=subject, body=body)
+from src.utils.mcp_email_client import get_mcp_email_server_config
 
 
 email_summary_agent = Agent(
@@ -33,7 +24,7 @@ email_summary_agent = Agent(
         "- No emojis.\n\n"
         "When done, confirm that the email was sent."
     ),
-    tools=[send_email],
+    mcp_servers=[MCPServerStdio(get_mcp_email_server_config())],
     model=build_default_litellm_model(),
     model_settings=ModelSettings(include_usage=True),
 )
