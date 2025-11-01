@@ -18,12 +18,14 @@ class UserProfile(BaseModel):
     has_children: bool = False
     risk_tolerance: str | None = None  # low, medium, high
     financial_goals: list[str] = []  # e.g., ["savings", "investment", "home_purchase"]
+
     
 
 class ProductRecommendationContext(BaseModel):
     """Context for product recommendation operations."""
     user_profile: UserProfile | None = None
     session_id: str | None = None
+
 
 
 def _get_products_catalog_dict() -> dict:
@@ -206,6 +208,7 @@ def rank_products_for_profile(user_profile_json: str) -> list[dict]:
 def rank_products_for_user(
     user_profile_json: Annotated[str, "JSON representation of user profile"],
 ) -> str:
+
     """FunctionTool: Rank all products and return as JSON string."""
     ranked = rank_products_for_profile(user_profile_json)
     return json.dumps(ranked, ensure_ascii=False)
