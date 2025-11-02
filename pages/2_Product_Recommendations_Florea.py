@@ -20,6 +20,22 @@ from typing import Dict, List, Tuple, Optional
 from agents import Runner
 import os
 from pydantic import ValidationError
+import sys
+from pathlib import Path
+import glob
+import difflib
+
+# Make local vendored 'st-annotated-text' importable
+_BASE_DIR = Path(__file__).resolve().parent.parent
+_ANNOTATED_TEXT_DIR = _BASE_DIR / "st-annotated-text"
+if str(_ANNOTATED_TEXT_DIR) not in sys.path:
+    sys.path.insert(0, str(_ANNOTATED_TEXT_DIR))
+
+try:
+    from annotated_text import annotated_text, annotation  # type: ignore
+except Exception:
+    annotated_text = None  # Will guard usage later
+    annotation = None
 
 from src.config.settings import AWS_BEDROCK_API_KEY
 
@@ -52,6 +68,8 @@ from src.agents.bank_term_extractor_agent import (
     bank_term_extractor_agent,
     ExtractionResult,
 )
+from src.agents.term_explain_agent import explain_term
+from src.agents.voice_explain_agent import explain_term_voice
 
 """
 Feature flags for LLM-driven enrichments. Disable to avoid extra turns/latency
@@ -347,6 +365,145 @@ def highlight_bank_terms_html(text: str, product_id: str) -> str:
     
     return context_menu_html
 
+
+def _extract_tokens_with_positions(text: str) -> tuple[list[tuple[int, int, str, str]], dict[str, set[str]]]:
+    """Use the bank_term_extractor_agent to get tokens and find their spans in text.
+
+    Returns a tuple of (matches, tokens_by_cat)
+    - matches: list of (start, end, category, matched_text)
+    - tokens_by_cat: mapping category -> set(tokens)
+    """
+    if not text or not text.strip():
+        return [], {}
+
+    # Run extraction synchronously and defensively
+    try:
+        validated = asyncio.run(run_agent_extraction(text))
+    except Exception:
+        validated = None
+
+    tokens_by_cat: Dict[str, set] = defaultdict(set)
+    if validated:
+        for cat in ALLOWED_CATEGORIES:
+            for t in getattr(validated.categories, cat):
+                tt = (t or "").strip()
+                if tt:
+                    tokens_by_cat[cat].add(tt)
+
+    def _is_word_char(ch: str) -> bool:
+        if not ch:
+            return False
+        cat = unicodedata.category(ch)
+        return cat.startswith("L") or cat.startswith("N") or cat.startswith("M")
+
+    def _word_boundary_ok(start: int, end: int) -> bool:
+        if start > 0 and _is_word_char(text[start - 1]):
+            return False
+        if end < len(text) and _is_word_char(text[end]):
+            return False
+        return True
+
+    def _find_all_occurrences(hay: str, needle: str) -> list[tuple[int, int]]:
+        res: list[tuple[int, int]] = []
+        if not needle:
+            return res
+        low_hay = hay.lower()
+        low_need = needle.lower()
+        i = 0
+        while True:
+            i = low_hay.find(low_need, i)
+            if i == -1:
+                break
+            j = i + len(needle)
+            if _word_boundary_ok(i, j):
+                res.append((i, j))
+            i += 1
+        return res
+
+    # Build prioritized list of tokens (longer first)
+    all_cat_tokens: list[tuple[str, str]] = []
+    for cat, toks in tokens_by_cat.items():
+        for t in toks:
+            all_cat_tokens.append((cat, t))
+    all_cat_tokens.sort(key=lambda ct: -len(ct[1]))
+
+    used: list[tuple[int, int]] = []
+    matches: list[tuple[int, int, str, str]] = []
+    for cat, tok in all_cat_tokens:
+        for s, e in _find_all_occurrences(text, tok):
+            if any(not (e <= us or s >= ue) for us, ue in used):
+                continue
+            matches.append((s, e, cat, text[s:e]))
+            used.append((s, e))
+
+    matches.sort(key=lambda t: t[0])
+    return matches, tokens_by_cat
+
+
+def render_annotated_summary(text: str) -> list[tuple[str, str]]:
+    """Render the summary using st-annotated-text and return list of (term, category).
+
+    If st-annotated-text is not available, fall back to plain text.
+    """
+    if not text:
+        st.write("")
+        return []
+
+    matches, _ = _extract_tokens_with_positions(text)
+
+    # Build pieces: plain strings and (body, label, background)
+    pieces: list = []
+    last = 0
+    terms: list[tuple[str, str]] = []
+    for s, e, cat, seg in matches:
+        if s > last:
+            pieces.append(text[last:s])
+        bg = CATEGORY_COLORS.get(cat, "#e5e7eb")
+        pieces.append((seg, cat, bg))
+        terms.append((seg, cat))
+        last = e
+    if last < len(text):
+        pieces.append(text[last:])
+
+    if annotated_text:
+        annotated_text(*pieces)
+    else:
+        # Fallback: simple markdown
+        st.markdown(f"<div style='white-space:pre-wrap'>{html.escape(text)}</div>", unsafe_allow_html=True)
+
+    # Deduplicate terms while preserving order
+    seen = set()
+    uniq_terms: list[tuple[str, str]] = []
+    for t, c in terms:
+        key = (t.lower(), "")
+        if key not in seen:
+            seen.add(key)
+            uniq_terms.append((t, ""))
+    return uniq_terms
+
+
+def _load_product_markdown(product_name: str) -> str:
+    """Best-effort load of product markdown from products/ directory using fuzzy match."""
+    try:
+        product_dir = (_BASE_DIR / "products").resolve()
+        files = list(product_dir.glob("*.md"))
+        if not files:
+            return ""
+        # Score by difflib ratio on stem and full name
+        def score(p: Path) -> float:
+            stem = p.stem.replace("_", " ")
+            return max(
+                difflib.SequenceMatcher(None, product_name.lower(), stem.lower()).ratio(),
+                difflib.SequenceMatcher(None, product_name.lower(), p.name.lower()).ratio(),
+            )
+        best = max(files, key=score)
+        # Only accept if similarity is decent
+        if score(best) < 0.4:
+            return ""
+        return best.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        return ""
+
 apply_button_styling()
 render_sidebar_info()
 
@@ -444,6 +601,8 @@ with col1:
         index=education_options.index(_get_default(education_options, user_defaults.get("education_level"), education_options[2])) if user_defaults.get("education_level") in education_options else 2,
         help="Cel mai înalt nivel de educație finalizat"
     )
+    # Persist selected education level for sidebar explanations
+    st.session_state["selected_education_level"] = education_level
 
 with col2:
     employment_options = ["Angajat", "Independent", "Șomer", "Pensionar", "Student"]
@@ -488,6 +647,14 @@ if 'llm_titles' not in st.session_state:
     st.session_state.llm_titles = {}
 if 'user_profile_data' not in st.session_state:
     st.session_state.user_profile_data = None
+if 'selected_term' not in st.session_state:
+    st.session_state.selected_term = None
+if 'selected_term_meta' not in st.session_state:
+    st.session_state.selected_term_meta = {}
+if 'term_explanation' not in st.session_state:
+    st.session_state.term_explanation = None
+if 'term_explanation_audio' not in st.session_state:
+    st.session_state.term_explanation_audio = None
 
 # Get Recommendations Button
 if st.button("🔍 Obține Recomandări", type="primary", use_container_width=True):
@@ -850,9 +1017,33 @@ if st.session_state.ranked_products is not None:
             summary_text = product.get("personalized_summary") or product.get("base_summary") or product.get("description", "")
             if summary_text:
                 st.markdown("**💡 Recomandare Personalizată:**")
-                # Render summary with bank term highlighting and context menu
-                highlighted_html = highlight_bank_terms_html(summary_text, product_id)
-                components.html(highlighted_html, height=200, scrolling=True)
+                # Render summary with st-annotated-text and capture candidate terms
+                with st.container():
+                    terms = render_annotated_summary(summary_text)
+                    if terms:
+                        # Let user choose a highlighted term to explain
+                        term_labels = [f"{t} ({c})" for t, c in terms]
+                        default_idx = 0
+                        selected_label = st.selectbox(
+                            "Selectează un termen pentru explicații",
+                            options=["— Niciun termen —"] + term_labels,
+                            index=0,
+                            key=f"term_select_{product_id}",
+                            help="Alege un termen evidențiat din text pentru a vedea explicația în panoul lateral.",
+                        )
+                        if selected_label != "— Niciun termen —":
+                            sel_idx = term_labels.index(selected_label)
+                            sel_term, sel_cat = terms[sel_idx]
+                            # Persist selection globally for the sidebar actions
+                            st.session_state.selected_term = sel_term
+                            st.session_state.selected_term_meta = {
+                                "category": sel_cat,
+                                "product_id": product_id,
+                                "product_name": display_name,
+                                "summary_text": summary_text,
+                            }
+                    else:
+                        st.caption("Nu au fost identificate termeni bancari de explicat în acest text.")
             
             # Personalized note for top recommendation
             if idx == 1:
@@ -1342,6 +1533,56 @@ if st.session_state.get("pdf_conversion_running", False):
 
 # Information sidebar
 with st.sidebar:
+    st.subheader("💬 Explicații termeni")
+    term = st.session_state.get("selected_term")
+    meta = st.session_state.get("selected_term_meta", {}) or {}
+    edu_level = st.session_state.get("selected_education_level")
+
+    disabled = term is None
+    if term:
+        st.caption(f"Termen selectat: {term} ({meta.get('category', 'n/a')})")
+        st.caption(f"Produs: {meta.get('product_name', 'n/a')}")
+
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("Explain", disabled=disabled, use_container_width=True):
+            # Load product markdown and call the text explanation agent
+            product_markdown = _load_product_markdown(meta.get("product_name") or "")
+            explanation = explain_term(
+                term=term or "",
+                summary_text=(meta.get("summary_text") or ""),
+                education_level=edu_level,
+                product_name=meta.get("product_name"),
+                product_markdown=product_markdown,
+            )
+            st.session_state["term_explanation"] = explanation
+            st.session_state["term_explanation_audio"] = None
+    with c2:
+        if st.button("Voice Explain", disabled=disabled, use_container_width=True):
+            product_markdown = _load_product_markdown(meta.get("product_name") or "")
+            # Prefer existing text explanation to avoid extra LLM calls
+            text = st.session_state.get("term_explanation")
+            if not text:
+                text, audio_bytes = explain_term_voice(
+                    term=term or "",
+                    summary_text=(meta.get("summary_text") or ""),
+                    education_level=edu_level,
+                    product_name=meta.get("product_name"),
+                    product_markdown=product_markdown,
+                )
+            else:
+                # Only do TTS if text already computed
+                from src.agents.voice_explain_agent import text_to_speech_openai
+                audio_bytes = text_to_speech_openai(text)
+
+            st.session_state["term_explanation"] = text
+            st.session_state["term_explanation_audio"] = audio_bytes if audio_bytes else None
+
+    if st.session_state.get("term_explanation"):
+        st.info(st.session_state["term_explanation"])
+    if st.session_state.get("term_explanation_audio"):
+        st.audio(st.session_state["term_explanation_audio"], format="audio/mp3")
+
     st.divider()
     st.subheader("ℹ️ Informații")
     

@@ -13,7 +13,7 @@ _os.environ["AGENTS_TRACING_DISABLED"] = "true"
 _os.environ["OPENAI_TRACING_DISABLED"] = "true"
 _os.environ["LITELLM_TELEMETRY"] = "False"
 _os.environ["LITELLM_LOG"] = "ERROR"
-_os.environ.pop("OPENAI_API_KEY", None)
+# Do not remove the OpenAI key; voice/TTS features use OpenAI directly when available
 
 # Additional tracing disables for Agents SDK
 _os.environ["AGENTS_DISABLE_TRACING"] = "true"
