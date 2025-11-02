@@ -1,13 +1,53 @@
-"""Product Recommendation Agent - Personalized banking product recommendations."""
+"""Product Recommendation Agent - Personalized banking product recommendations.
+
+This agent uses an AI-powered justification system to rank products based on user profiles.
+Instead of heuristic scoring, it leverages a specialized tool agent to analyze product relevance.
+
+Architecture:
+1. Product Justification Agent (as_a_tool): Analyzes product-user fit with detailed justification
+2. Product Recommendation Agent: Orchestrates ranking by calling the tool agent for each product
+"""
+
+# Disable tracing BEFORE importing agents to prevent OpenAI API errors
+import os as _env_os
+_env_os.environ["AGENTS_TRACING_DISABLED"] = "true"
+_env_os.environ["OPENAI_TRACING_DISABLED"] = "true"
+_env_os.environ["AGENTS_DISABLE_TRACING"] = "true"
+
+# Disable LiteLLM logging and callbacks completely
+_env_os.environ["LITELLM_SUCCESS_CALLBACK"] = ""
+_env_os.environ["LITELLM_FAILURE_CALLBACK"] = ""
+_env_os.environ["LITELLM_DROP_PARAMS"] = "True"
+
+# Import and configure litellm BEFORE any other imports
+import warnings
+warnings.filterwarnings("ignore")  # Suppress all warnings including async logging errors
+
+import litellm
+litellm.suppress_debug_info = True
+litellm.set_verbose = False
+# Disable success/failure handlers completely
+litellm.success_callback = []
+litellm.failure_callback = []
+# Disable the async logging worker
+litellm._async_success_callback = []
+litellm._async_failure_callback = []
 
 from agents import Agent, function_tool
-from typing import Annotated
+from typing import Annotated, List, Dict, Any
 from pydantic import BaseModel
 import json
-from src.config.settings import (
-    build_default_litellm_model,
-)
+import asyncio
+import re
+import threading
+import concurrent.futures
+from src.config.settings import build_default_litellm_model
+from src.utils.db import get_all_products, get_user_by_email
 
+
+# ============================================================================
+# DATA MODELS
+# ============================================================================
 
 class UserProfile(BaseModel):
     """User profile for product recommendations."""
@@ -20,6 +60,16 @@ class UserProfile(BaseModel):
     financial_goals: list[str] = []  # e.g., ["savings", "investment", "home_purchase"]
     education_level: str | None = None  # fara_studii_superioare, liceu, facultate, masterat, doctorat
 
+
+class ProductJustification(BaseModel):
+    """Justification result from the tool agent."""
+    product_name: str
+    relevance_score: float  # 0.0 to 1.0
+    justification: str
+    key_benefits: List[str]
+    recommended_action: str
+
+
 class ProductRecommendationContext(BaseModel):
     """Context for product recommendation operations."""
     user_profile: UserProfile | None = None
@@ -27,279 +77,431 @@ class ProductRecommendationContext(BaseModel):
 
 
 
-def _get_products_catalog_dict() -> dict:
-    """Internal helper: return products catalog as dict. Contains official Raiffeisen Bank Romania products."""
-    products = {
-        "card_cumparaturi_rate": {
-            "name": "Card de Cumpărături în Rate",
-            "description": "Card de credit cu opțiuni de plată în rate fără dobândă la comercianții parteneri Raiffeisen Bank",
-            "base_summary": "Card de credit special pentru cumpărături în rate fără dobândă la magazinele partenere, cu posibilitatea de a plăti până la 12 rate lunare fixe pentru achizițiile tale.",
-            "benefits": ["Rate fără dobândă până la 12 luni", "Disponibil la comercianți parteneri", "Valoare maximă tranzacție 40.000 RON sau 10.000 EUR"],
-            "target_audience": "Clienți cu venituri regulate care fac achiziții frecvente la parteneri"
-        },
-        
-        "depozite_termen": {
-            "name": "Depozite la Termen",
-            "description": "Depozite bancare cu dobândă fixă și garantată în RON, EUR și USD",
-            "base_summary": "Depozit bancar sigur cu dobândă fixă garantată, oferind randamente competitive cu protecție totală a capitalului pe perioade flexibile de la 1 la 12 luni.",
-            "benefits": ["Dobânzi competitive (5.70% la 3 luni RON, 5.20% la 12 luni RON)", "Depozit minim: 500 RON, 200 EUR/USD", "Perioade: 1-12 luni", "Bonus 0.30% pentru clienți cu salariu", "Garantat prin Fondul de Garantare a Depozitelor"],
-            "target_audience": "Clienți care doresc să economisească fără risc cu randament garantat"
-        },
-        
-        "cont_economii_super_acces": {
-            "name": "Cont de Economii Super Acces Plus",
-            "description": "Cont de economii flexibil cu dobândă progresivă și acces nelimitat la fonduri",
-            "base_summary": "Cont de economii cu dobândă variabilă progresivă în funcție de sold, oferind acces instant la bani fără penalități și fără comisioane de administrare.",
-            "benefits": ["Dobândă variabilă progresivă (2-3% RON, 0.50% EUR, 0.30% USD)", "Sumă minimă deschidere: 1 RON/EUR/USD", "Retrageri nelimitate fără penalizări", "Zero comision administrare", "Calcul zilnic dobândă, capitalizare lunară", "Funcție SavingBox economisire automată (1%, 3%, 5%, 10% din plățile cu cardul)"],
-            "target_audience": "Clienți care vor flexibilitate și acces imediat la economii"
-        },
-        
-        "card_debit_platinum": {
-            "name": "Card de Debit Visa Platinum",
-            "description": "Card de debit premium cu beneficii extinse și asigurări incluse",
-            "base_summary": "Card de debit premium cu comision zero la plăți, acces în saloanele de aeroport LoungeKey, asigurare de călătorie inclusă și reduceri exclusive.",
-            "benefits": ["Zero comision plăți la comercianți", "Acces LoungeKey în saloanele de aeroport", "Asigurare de călătorie inclusă", "Reduceri și oferte exclusive", "Serviciu BlackCab", "Asistență rutieră premium", "Serviciu de concierge"],
-            "target_audience": "Clienți cu venituri mari care călătoresc frecvent și doresc servicii premium"
-        },
-        
-        "credit_ipotecar_casa_ta": {
-            "name": "Credit Ipotecar Casa Ta",
-            "description": "Credit imobiliar pentru achiziție, construcție sau refinanțare locuință",
-            "base_summary": "Credit imobiliar pentru cumpărarea sau refinanțarea casei tale, cu dobândă competitivă, perioadă până la 30 de ani și avans minim de 15%, inclusiv opțiuni prin programul Prima Casă.",
-            "benefits": ["Sumă: 5.000-300.000 EUR echivalent", "Perioadă: 3-30 ani", "Avans minim: 15%", "Dobândă fixă 3-5 ani de la 5.10%, apoi variabilă (marjă 2.40% + IRCC)", "Refinanțare cu bonus 2.000 RON", "Program Noua Casă disponibil (avans 5-15%, dobândă 2%)"],
-            "target_audience": "Familii tinere sau clienți care doresc să cumpere casă"
-        },
-        
-        "credit_nevoi_personale": {
-            "name": "Credit de Nevoi Personale Flexicredit",
-            "description": "Credit rapid negarantat pentru orice scop personal",
-            "base_summary": "Credit personal rapid cu aprobare în 24 de ore, fără garanții până la 50.000 EUR echivalent, cu rată flexibilă și perioadă de rambursare de până la 5 ani.",
-            "benefits": ["Sumă: 500-50.000 EUR echivalent în RON", "Perioadă: 18 luni până la 5 ani", "Fără garanții", "Dobândă de la 5.75%", "DAE între 8.11%-36.66%", "Aprobare rapidă", "Necesare doar CI și consimțământ ANAF", "Venit net minim: 510 EUR"],
-            "target_audience": "Clienți cu nevoi financiare pe termen scurt/mediu și venituri regulate"
-        },
-        
-        "fonduri_investitii_smartinvest": {
-            "name": "Planuri de Investiții SmartInvest",
-            "description": "Portofolii de investiții diversificate gestionate profesional prin Raiffeisen Asset Management",
-            "base_summary": "Planuri de investiții cu contribuții lunare automate gestionate de experți, cu opțiuni multiple de fonduri (obligațiuni, mixte, acțiuni) și avantaje fiscale pentru investiții pe termen lung.",
-            "benefits": ["Investiție lunară automată de la 200 RON/50 EUR/50 USD", "Opțiuni multiple de fonduri (obligațiuni, mixte, acțiuni)", "Comisioane curente: 0.99%-2.43% în funcție de fond", "Costuri zero pentru deschidere/închidere plan", "Administrare 100% online prin Smart Mobile", "Avantaje fiscale (taxă 1% pentru dețineri peste 365 zile, 3% sub 365 zile)", "Gestiune profesională portofoliu", "Contribuții flexibile"],
-            "target_audience": "Clienți cu toleranță medie/ridicată la risc care caută creștere de capital pe termen lung"
-        },
-        
-        "pensie_privata_pilon3": {
-            "name": "Pensie Privată Raiffeisen Acumulare (Pilon III)",
-            "description": "Plan opțional de economisire pe termen lung pentru pensie cu avantaje fiscale",
-            "base_summary": "Plan de pensie privată facultativă cu contribuții voluntare, avantaje fiscale de până la 400 EUR/an și investiții profesionale pentru menținerea nivelului de trai la pensionare.",
-            "benefits": ["Contribuții voluntare cu conturi individuale", "Contribuție maximă: 15% din venitul brut lunar", "Contribuție minimă: 100 RON/lună (Raiffeisen Acumulare)", "Scutiri fiscale până la 400 EUR/an pentru contribuții angajat și angajator", "Investiții profesionale în instrumente financiare diverse", "Potențial de randament superior sistemului public de pensii", "Relație directă între contribuții și beneficii"],
-            "target_audience": "Clienți angajați care plănuiesc pensionarea și doresc să mențină nivelul de trai"
-        },
-        
-        "cont_junior_adolescenti": {
-            "name": "Cont Junior pentru Adolescenți (14-17 ani)",
-            "description": "Cont curent special pentru adolescenți cu vârste între 14-17 ani",
-            "base_summary": "Cont curent pentru tinerii între 14-17 ani cu card de debit VISA inclus, zero comisioane, retrageri gratuite de numerar la orice bancomat din România și aplicație Smart Mobile pentru educație financiară.",
-            "benefits": ["Zero comisioane cont și card", "Zero comisioane Smart Mobile", "Retrageri gratuite numerar la orice bancomat din România", "Card de debit inclus (VISA)", "Apple Pay și Google Pay", "Notificări în timp real", "Bonus financiar", "Supraveghere părintească", "Instrument de educație financiară"],
-            "target_audience": "Părinți care doresc să învețe responsabilitatea financiară copiilor adolescenți (14-17 ani)"
-        },
-        
-        "asigurare_viata_economii": {
-            "name": "Asigurare de Viață cu Componentă de Economisire",
-            "description": "Asigurare de viață cu economii garantate și protecție financiară pentru familie",
-            "base_summary": "Asigurare de viață combinată cu economii garantate la dobândă fixă, oferind protecție financiară familiei în caz de deces sau invaliditate și sumă asigurată la scadență.",
-            "benefits": ["Protecție financiară în caz de deces sau invaliditate permanentă din accident", "Componentă de economii garantată cu dobândă fixă", "Junior Protect Plus: economii pentru viitorul copiilor (educație, afacere)", "Senior Protect Plus: confort la pensionare și stabilitate financiară", "Primă lunară minimă: 100 RON", "Fără examen medical", "Emitere simplă poliță", "Sumă asigurată garantată plus beneficiu suplimentar la scadență", "Plata primei continuată de asigurător în caz de eveniment acoperit"],
-            "target_audience": "Clienți cu familie care doresc protecție financiară și economii pe termen lung combinate"
-        }
-    }
-    return products
+# ============================================================================
+# DATABASE HELPERS
+# ============================================================================
 
-
-@function_tool
-def get_raiffeisen_products() -> str:
-    """FunctionTool: Get the complete list of available Raiffeisen Bank products as JSON string."""
-    return str(_get_products_catalog_dict())
-
-
-def _calculate_product_score_internal(product_id: str, profile: UserProfile) -> float:
-    """Internal scoring logic. Computes relevance score [0..1] for a product given user profile.
+def _get_products_from_database() -> List[Dict[str, Any]]:
+    """Fetch all products from PostgreSQL database.
     
-    TODO: Replace with ML model (sklearn) or fetch from database/API.
-    Currently uses rule-based heuristics.
+    Returns:
+        List of products with id, product_name, product_description
     """
-    score = 0.5
-
-    # Age-based scoring
-    if profile.age is not None:
-        if product_id == "pensie_privata_pilon3" and profile.age >= 40:
-            score += 0.2
-        if product_id == "cont_junior_adolescenti" and profile.has_children:
-            score += 0.2
-        if product_id == "credit_ipotecar_casa_ta" and 25 <= profile.age <= 45:
-            score += 0.1
-
-    # Risk tolerance
-    if profile.risk_tolerance:
-        rt = profile.risk_tolerance.lower()
-        if product_id in {"depozite_termen", "cont_economii_super_acces"} and rt in {"scăzută", "scazuta", "low"}:
-            score += 0.2
-        if product_id == "fonduri_investitii_smartinvest" and rt in {"ridicată", "ridicata", "high"}:
-            score += 0.2
-
-    # Financial goals
-    if profile.financial_goals:
-        goals = {g.lower() for g in profile.financial_goals}
-        if product_id == "credit_ipotecar_casa_ta" and any(
-            goal in goals for goal in ["cumpărare casă", "cumparare casa", "cumparare casă", "casa", "casă", "home"]
-        ):
-            score += 0.25
-        if product_id == "cont_economii_super_acces" and "economii" in " ".join(goals):
-            score += 0.15
-        if product_id == "depozite_termen" and "economii pe termen lung" in " ".join(goals):
-            score += 0.1
-        if product_id == "pensie_privata_pilon3" and "pensionare" in " ".join(goals):
-            score += 0.15
-
-    # Income-based scoring
-    if profile.annual_income is not None:
-        if product_id == "card_debit_platinum" and profile.annual_income >= 120_000:
-            score += 0.1
-        if product_id == "credit_ipotecar_casa_ta" and profile.annual_income >= 60_000:
-            score += 0.1
-
-    return max(0.0, min(score, 1.0))
+    return get_all_products()
 
 
-@function_tool
-def calculate_product_score(
-    product_id: Annotated[str, "Product identifier"],
-    user_profile: Annotated[str, "JSON string of user profile data"],
-) -> float:
-    """FunctionTool: Calculate relevance score for a product based on user profile."""
-    profile = UserProfile.model_validate_json(user_profile)
-    return _calculate_product_score_internal(product_id, profile)
-
-
-def rank_products_for_profile(user_profile_json: str) -> list[dict]:
-    """MAIN RANKING FUNCTION: Rank all products based on user profile.
+def _extract_product_summary(markdown_content: str) -> str:
+    """Extract a concise summary from markdown product description.
     
-    This is the core output of the Product Recommendation Agent. It returns
-    a list of products sorted by relevance score (highest first).
+    Args:
+        markdown_content: Full markdown product description
+        
+    Returns:
+        Extracted summary (first 300 chars of general description)
+    """
+    # Try to extract content after "## Descriere Generală" or similar
+    description_match = re.search(
+        r'## Descriere.*?\n\n(.*?)(?:\n##|\Z)',
+        markdown_content,
+        re.DOTALL | re.IGNORECASE
+    )
+    
+    if description_match:
+        summary = description_match.group(1).strip()
+        # Clean up markdown formatting
+        summary = re.sub(r'\*\*', '', summary)
+        summary = re.sub(r'\n+', ' ', summary)
+        return summary[:300]
+    
+    # Fallback: return first paragraph
+    lines = markdown_content.split('\n')
+    for line in lines:
+        line = line.strip()
+        if line and not line.startswith('#'):
+            return line[:300]
+    
+    return "Produs bancar disponibil"
+
+
+def _extract_product_benefits(markdown_content: str) -> List[str]:
+    """Extract key benefits from markdown product description.
+    
+    Args:
+        markdown_content: Full markdown product description
+        
+    Returns:
+        List of benefit strings (up to 5)
+    """
+    benefits = []
+    
+    # Try to find "Avantaje" or "Beneficii" section
+    benefits_match = re.search(
+        r'## (?:Avantaje|Beneficii).*?\n(.*?)(?:\n##|\Z)',
+        markdown_content,
+        re.DOTALL | re.IGNORECASE
+    )
+    
+    if benefits_match:
+        content = benefits_match.group(1)
+        # Extract bullet points or numbered items
+        lines = content.split('\n')
+        for line in lines:
+            line = line.strip()
+            # Match bullets like "- text" or "* text" or "### number. text"
+            if re.match(r'^[-*]\s+', line) or re.match(r'^###\s+\d+\.', line):
+                benefit = re.sub(r'^[-*]\s+', '', line)
+                benefit = re.sub(r'^###\s+\d+\.\s+', '', benefit)
+                benefit = re.sub(r'\*\*', '', benefit)
+                if benefit:
+                    benefits.append(benefit[:150])
+                if len(benefits) >= 5:
+                    break
+    
+    # Fallback: extract from "Caracteristici Principale"
+    if not benefits:
+        char_match = re.search(
+            r'## Caracteristici.*?\n(.*?)(?:\n##|\Z)',
+            markdown_content,
+            re.DOTALL | re.IGNORECASE
+        )
+        if char_match:
+            content = char_match.group(1)
+            lines = content.split('\n')
+            for line in lines:
+                line = line.strip()
+                if line and not line.startswith('#') and len(line) > 10:
+                    benefits.append(line[:150])
+                if len(benefits) >= 5:
+                    break
+    
+    return benefits[:5] if benefits else ["Consulta descrierea completa pentru detalii"]
+
+
+def _get_products_catalog_dict() -> dict:
+    """Get products catalog from database with structured information.
+    
+    This function fetches products from the database and structures them
+    for backward compatibility with the UI components.
+    
+    Returns:
+        Dict mapping product names to structured data with keys:
+        - name: Product display name
+        - description: Concise product summary
+        - benefits: List of key benefits
+    """
+    db_products = _get_products_from_database()
+    
+    catalog = {}
+    for product in db_products:
+        product_name = product["product_name"]
+        markdown_content = product["product_description"]
+        
+        # Extract structured data from markdown
+        summary = _extract_product_summary(markdown_content)
+        benefits = _extract_product_benefits(markdown_content)
+        
+        # Extract display name from markdown (first H1 heading) or use product_name
+        title_match = re.search(r'^#\s+(.+?)(?:\s*-\s*Raiffeisen)?$', markdown_content, re.MULTILINE)
+        display_name = title_match.group(1).strip() if title_match else product_name.replace('_', ' ').title()
+        
+        catalog[product_name] = {
+            "name": display_name,
+            "description": summary,
+            "benefits": benefits,
+        }
+    
+    return catalog
+
+
+
+# ============================================================================
+# PRODUCT JUSTIFICATION TOOL AGENT
+# ============================================================================
+
+# This agent analyzes product-user profile fit and provides detailed justification
+product_justification_agent = Agent[ProductRecommendationContext](
+    name="Product Justification Expert",
+    instructions="""You are a banking product expert. Analyze product-user fit and respond IMMEDIATELY with ONLY valid JSON.
+
+Scoring Guide:
+- 0.9-1.0: Perfect fit
+- 0.7-0.89: Good fit
+- 0.5-0.69: Moderate fit
+- 0.3-0.49: Weak fit
+- 0.0-0.29: Poor fit
+
+Consider: age, income, family, risk tolerance, goals, life stage.
+
+CRITICAL: Output ONLY JSON, nothing else. No explanations, no markdown, just JSON:
+
+{
+  "product_name": "exact product name from input",
+  "relevance_score": 0.0-1.0,
+  "justification": "2-3 sentences why this score based on user specifics",
+  "key_benefits": ["3-5 benefits relevant to THIS user"],
+  "recommended_action": "concrete next step with amounts/timeframes"
+}
+
+DO NOT use tools. DO NOT ask questions. Respond IMMEDIATELY with JSON.""",
+    model=build_default_litellm_model(),
+)
+
+
+
+# ============================================================================
+# SYNCHRONOUS WRAPPER FOR AGENT TOOL
+# ============================================================================
+
+async def _analyze_product_fit_async(
+    product_name: str,
+    product_description: str,
+    user_profile: UserProfile
+) -> ProductJustification:
+    """Async function to call the justification agent tool.
+    
+    Args:
+        product_name: Name of the product
+        product_description: Full product description from database
+        user_profile: User's financial profile
+        
+    Returns:
+        ProductJustification with score and reasoning
+    """
+    from agents import Runner
+    
+    # Build the analysis prompt - simplified to reduce turns
+    prompt = f"""Analyze this banking product for the user and output ONLY valid JSON.
+
+PRODUCT: {product_name}
+DESCRIPTION: {product_description[:1500]}
+
+USER: {user_profile.age}y, {user_profile.annual_income} RON/year, {user_profile.marital_status}, {user_profile.employment_status}, children={user_profile.has_children}, risk={user_profile.risk_tolerance}, goals={user_profile.financial_goals}
+
+OUTPUT ONLY THIS JSON (no other text):
+{{
+  "product_name": "{product_name}",
+  "relevance_score": 0.0-1.0,
+  "justification": "2-3 sentences why this score",
+  "key_benefits": ["benefit1", "benefit2", "benefit3"],
+  "recommended_action": "concrete next step"
+}}"""
+    
+    # Run the agent asynchronously
+    try:
+        result = await Runner.run(product_justification_agent, prompt, max_turns=3)
+        
+        # Extract and parse the output
+        output = result.final_output if hasattr(result, 'final_output') else str(result)
+        print(f"[Agent Output] {product_name[:30]}: {output[:100]}...")
+        
+        # Try to parse JSON from output
+        json_match = re.search(r'\{.*\}', output, re.DOTALL)
+        if json_match:
+            parsed = json.loads(json_match.group())
+            return ProductJustification(**parsed)
+        else:
+            # Fallback if JSON parsing fails
+            return ProductJustification(
+                product_name=product_name,
+                relevance_score=0.5,
+                justification="Could not generate detailed analysis",
+                key_benefits=["Please review product details"],
+                recommended_action="Contact advisor for more information"
+            )
+    except Exception as e:
+        print(f"Error analyzing product {product_name}: {e}")
+        # Return neutral score on error
+        return ProductJustification(
+            product_name=product_name,
+            relevance_score=0.5,
+            justification=f"Analysis error: {str(e)[:100]}",
+            key_benefits=["Review product details manually"],
+            recommended_action="Contact advisor for personalized recommendation"
+        )
+
+
+def _analyze_product_fit_sync(
+    product_name: str,
+    product_description: str,
+    user_profile: UserProfile
+) -> ProductJustification:
+    """Synchronous wrapper that handles event loop properly.
+    
+    Works in Streamlit (no event loop in thread) and tests.
+    Always creates a new event loop in a separate thread for safety.
+    """
+    result_container = []
+    exception_container = []
+    
+    def run_in_thread():
+        """Run async function in a new thread with its own event loop."""
+        new_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(new_loop)
+        try:
+            result = new_loop.run_until_complete(
+                _analyze_product_fit_async(product_name, product_description, user_profile)
+            )
+            result_container.append(result)
+        except Exception as e:
+            exception_container.append(e)
+        finally:
+            new_loop.close()
+    
+    try:
+        thread = threading.Thread(target=run_in_thread)
+        thread.start()
+        thread.join(timeout=45)  # 45 second timeout per product
+        
+        if not thread.is_alive():
+            # Thread completed
+            if exception_container:
+                raise exception_container[0]
+            if result_container:
+                return result_container[0]
+            else:
+                raise RuntimeError("Thread completed but no result returned")
+        else:
+            # Thread is still running - timeout
+            raise TimeoutError(f"Product analysis timed out after 45 seconds")
+            
+    except Exception as e:
+        print(f"Error in sync wrapper for {product_name}: {e}")
+        return ProductJustification(
+            product_name=product_name,
+            relevance_score=0.5,
+            justification=f"Analysis error: {str(e)[:100]}",
+            key_benefits=["Review product details manually"],
+            recommended_action="Contact advisor for personalized recommendation"
+        )
+
+
+# ============================================================================
+# MAIN RANKING FUNCTION (NEW AI-POWERED APPROACH)
+# ============================================================================
+
+def rank_products_for_profile(user_profile_json: str, max_products: int = None) -> list[dict]:
+    """MAIN RANKING FUNCTION: Rank all products using AI-powered justification agent.
+    
+    This is the core output of the Product Recommendation Agent. Instead of heuristic
+    scoring, it uses a specialized AI agent to analyze each product's relevance.
+    
+    Architecture:
+    1. Fetch all products from database
+    2. For each product, call the Justification Agent Tool
+    3. Agent analyzes product-user fit and returns score + justification
+    4. Sort products by relevance score
     
     Args:
         user_profile_json: JSON string of UserProfile
+        max_products: Optional limit on number of products to analyze (for performance)
     
     Returns:
-        List of dicts with keys: product_id, score
+        List of dicts with keys: product_id, score, justification
         Sorted descending by score (most relevant first)
     
     Example output:
         [
-            {"product_id": "cont_economii", "score": 0.85},
-            {"product_id": "depozite_termen", "score": 0.75},
+            {
+                "product_id": "cont_economii_super_acces",
+                "score": 0.85,
+                "justification": "Excellent fit because...",
+                "key_benefits": ["benefit1", "benefit2"],
+                "recommended_action": "Open account with 1000 RON"
+            },
             ...
         ]
-    
-    TODO: Replace rule-based scoring with:
-    - ML model (sklearn, lightgbm, etc.)
-    - Collaborative filtering based on similar users
-    - Fetch scores from database/API
-    - A/B test different ranking strategies
     """
-    profile = UserProfile.model_validate_json(user_profile_json)
-    catalog = _get_products_catalog_dict()
+    print(f"[Product Recommendation] Starting analysis for user profile...")
     
-    # Score all products
+    # Parse user profile
+    profile = UserProfile.model_validate_json(user_profile_json)
+    
+    # Fetch products from database
+    db_products = _get_products_from_database()
+    
+    if not db_products:
+        print("Warning: No products found in database. Returning empty list.")
+        return []
+    
+    # Optionally limit number of products for performance
+    if max_products and len(db_products) > max_products:
+        print(f"[Product Recommendation] Limiting analysis to {max_products} products (out of {len(db_products)})")
+        db_products = db_products[:max_products]
+    
+    print(f"[Product Recommendation] Analyzing {len(db_products)} products...")
+    
+    # Score all products using AI agent
     scored_products = []
-    for product_id in catalog.keys():
-        score = _calculate_product_score_internal(product_id, profile)
-        scored_products.append({
-            "product_id": product_id,
-            "score": round(score, 3),
-        })
+    
+    for idx, product in enumerate(db_products, 1):
+        product_name = product["product_name"]
+        product_description = product["product_description"]
+        
+        print(f"[Product Recommendation] {idx}/{len(db_products)}: Analyzing {product_name[:50]}...")
+        
+        try:
+            # Call the AI justification agent
+            justification = _analyze_product_fit_sync(
+                product_name=product_name,
+                product_description=product_description,
+                user_profile=profile
+            )
+            
+            scored_products.append({
+                "product_id": product_name,  # Using product_name as ID
+                "score": round(justification.relevance_score, 3),
+                "justification": justification.justification,
+                "key_benefits": justification.key_benefits,
+                "recommended_action": justification.recommended_action,
+            })
+            
+            print(f"[Product Recommendation] ✓ {product_name[:50]}: Score {justification.relevance_score:.2f}")
+            
+        except Exception as e:
+            print(f"[Product Recommendation] ✗ Error analyzing {product_name}: {e}")
+            # Add product with neutral score on error
+            scored_products.append({
+                "product_id": product_name,
+                "score": 0.5,
+                "justification": f"Could not analyze: {str(e)[:100]}",
+                "key_benefits": ["Contact advisor for details"],
+                "recommended_action": "Contact advisor",
+            })
     
     # Sort by score descending (highest relevance first)
     scored_products.sort(key=lambda x: x["score"], reverse=True)
     
+    print(f"[Product Recommendation] Analysis complete. Top product: {scored_products[0]['product_id'][:50]} ({scored_products[0]['score']})")
+    
     return scored_products
 
 
-@function_tool
-def rank_products_for_user(
-    user_profile_json: Annotated[str, "JSON representation of user profile"],
-) -> str:
+# ============================================================================
+# MAIN ORCHESTRATOR AGENT
+# ============================================================================
 
-    """FunctionTool: Rank all products and return as JSON string."""
-    ranked = rank_products_for_profile(user_profile_json)
-    return json.dumps(ranked, ensure_ascii=False)
-
-
-@function_tool
-def generate_personalized_pitch(
-    product_id: Annotated[str, "Product identifier"],
-    user_profile_json: Annotated[str, "JSON representation of user profile"],
-) -> str:
-    """Generate personalized product description based on user profile."""
-    # TODO: Implement personalization logic, potentially with LLM
-    return f"Personalized pitch for {product_id} based on user profile."
-
-
-# Product Analyzer Agent
-product_analyzer_agent = Agent[ProductRecommendationContext](
-    name="Product Analyzer",
-    instructions="""You are a product analysis specialist for Raiffeisen Bank.
-    
-    Your role:
-    1. Analyze user profiles to understand financial needs and preferences
-    2. Calculate relevance scores for each product
-    3. Identify the best product matches based on demographics and financial goals
-    
-    Consider factors like:
-    - Income level and stability
-    - Life stage (age, marital status, children)
-    - Risk tolerance
-    - Financial goals
-    
-    Be data-driven and objective in your analysis.""",
-    tools=[get_raiffeisen_products, calculate_product_score, rank_products_for_user],
-    model=build_default_litellm_model(),
-)
-
-# Personalization Agent
-personalization_agent = Agent[ProductRecommendationContext](
-    name="Personalization Specialist",
-    instructions="""You are a personalization specialist for Raiffeisen Bank.
-    
-    Your role:
-    1. Create personalized product descriptions that resonate with each customer
-    2. Highlight benefits most relevant to the user's situation
-    3. Use appropriate tone based on customer profile
-    
-    Tailor your communication to:
-    - Customer's life stage and priorities
-    - Financial literacy level (inferred from profile)
-    - Specific needs and goals
-    
-    Always be clear, honest, and customer-focused.""",
-    tools=[generate_personalized_pitch],
-    model=build_default_litellm_model(),
-)
-
-# Product Recommendation Orchestrator
 product_recommendation_orchestrator = Agent[ProductRecommendationContext](
     name="Product Recommendation Orchestrator",
-    instructions="""You are the main orchestrator for personalized product recommendations at Raiffeisen Bank.
+    instructions="""You are the main orchestrator for personalized product recommendations at Raiffeisen Bank Romania.
     
-    Your workflow:
-    1. Analyze the user profile using the Product Analyzer to rank products
-    2. Use the Personalization Specialist to create tailored descriptions
-    3. Present recommendations in order of relevance
-    4. Explain why each product is recommended for this specific customer
+    Your role:
+    1. Coordinate product ranking based on user profiles
+    2. Ensure each recommendation is well-justified and personalized
+    3. Provide transparency in why products are recommended
+    
+    You work with a specialized Justification Agent that analyzes product-user fit using:
+    - Life stage alignment (age, family, career)
+    - Financial capacity (income, savings, debt capacity)
+    - Risk-return fit (risk tolerance vs product risk)
+    - Goal alignment (how product helps achieve goals)
+    - Practical suitability (can they use/benefit from it?)
     
     Always prioritize:
-    - Customer needs over product sales
-    - Transparency in recommendations
-    - Suitability of products for the customer's situation
+    - Customer needs over sales targets
+    - Transparency and honesty
+    - Suitability and personalization
+    - Clear, actionable recommendations
     
-    Provide clear, actionable recommendations that help customers make informed decisions.""",
-    handoffs=[product_analyzer_agent, personalization_agent],
+    Provide recommendations that help customers make informed financial decisions.""",
     model=build_default_litellm_model(),
 )

@@ -32,6 +32,13 @@ from src.agents.financial_plan_agent import generate_financial_plan, format_plan
 from src.agents.pdf_converter_direct import convert_markdown_to_pdf_direct
 from src.utils.db import save_financial_plan
 
+"""
+Feature flags for LLM-driven enrichments. Disable to avoid extra turns/latency
+and rely solely on the Ranking Agent outputs (justification + recommended_action).
+"""
+USE_PERSONALIZATION_AGENT = False
+USE_TITLE_AGENT = False
+
 apply_button_styling()
 render_sidebar_info()
 
@@ -212,29 +219,59 @@ if st.button("🔍 Obține Recomandări", type="primary", use_container_width=Tr
                         "name": base_data.get("name", pid),
                         "description": base_data.get("description", ""),
                         "benefits": base_data.get("benefits", []),
-                        "score": product["score"],
+                        "score": product.get("score", 0.5),
+                        # carry over AI justification to use as default summary when skipping LLM
+                        "justification": product.get("justification", ""),
+                        "recommended_action": product.get("recommended_action", ""),
                     })
                 
-                # STEP 3: Summary Personalization Agent - Personalize English summaries for user
-                # Uses Bedrock LLM to adapt base summaries to user's specific situation
-                nest_asyncio.apply()
+                # Store a minimal base list in session BEFORE any LLM personalization
+                # so the UI always renders even if later steps fail
+                base_products_for_ui: list[tuple[str, dict]] = []
+                for p in products_with_descriptions:
+                    base_products_for_ui.append(
+                        (
+                            p["product_id"],
+                            {
+                                "name": p.get("name") or p["product_id"],
+                                "icon": "🏦",  # default icon; refined later
+                                "description": p.get("description", ""),
+                                "benefits": p.get("benefits", []),
+                                "score": p["score"],
+                                "base_summary": p.get("description", ""),
+                                "personalized_summary": "",
+                            },
+                        )
+                    )
+                st.session_state.ranked_products = base_products_for_ui
+                st.session_state.llm_titles = {}
+                st.session_state.user_profile_data = {
+                    "age": age,
+                    "annual_income": annual_income,
+                    "marital_status": marital_status,
+                }
                 
-                context = PersonalizationContext(user_profile=user_profile)
-                
-                async def run_personalization_agent():
-                    # Build hyper-personalized recommendations based on EVERY detail
-                    personalization_requests = []
-                    for product in products_with_descriptions:
-                        personalization_requests.append({
-                            "product_id": product["product_id"],
-                            "product_name": product["name"],
-                            "product_description": product["description"],
-                            "benefits": product["benefits"],
-                            "relevance_score": product["score"],
-                        })
-                    
-                    # Call LLM for deep personalization
-                    prompt = f"""Creează recomandări EXTREM DE PERSONALIZATE pentru fiecare produs bancar bazate pe profilul EXACT al utilizatorului.
+                # STEP 3: Summary Personalization Agent (optional)
+                if USE_PERSONALIZATION_AGENT:
+                    # Uses Bedrock LLM to adapt base summaries to user's specific situation
+                    nest_asyncio.apply()
+
+                    context = PersonalizationContext(user_profile=user_profile)
+
+                    async def run_personalization_agent():
+                        # Build hyper-personalized recommendations based on EVERY detail
+                        personalization_requests = []
+                        for product in products_with_descriptions:
+                            personalization_requests.append({
+                                "product_id": product["product_id"],
+                                "product_name": product["name"],
+                                "product_description": product["description"],
+                                "benefits": product["benefits"],
+                                "relevance_score": product["score"],
+                            })
+
+                        # Call LLM for deep personalization
+                        prompt = f"""Creează recomandări EXTREM DE PERSONALIZATE pentru fiecare produs bancar bazate pe profilul EXACT al utilizatorului.
 
 PROFIL UTILIZATOR COMPLET:
 - Vârstă: {user_profile.age} ani
@@ -339,99 +376,115 @@ Returnează DOAR un array JSON:
   ...
 ]"""
 
-                    result = await Runner.run(
-                        personalization_orchestrator,
-                        prompt,
-                        context=context,
-                    )
-                    return result
-                
-                # Execute personalization agent
-                with concurrent.futures.ThreadPoolExecutor() as executor:
-                    future = executor.submit(asyncio.run, run_personalization_agent())
-                    agent_result = future.result()
-                
-                # Parse LLM output
-                agent_output = agent_result.output if hasattr(agent_result, 'output') else str(agent_result)
-                
-                try:
-                    import re
-                    # Extract JSON array from LLM response
-                    json_match = re.search(r'\[.*?\]', agent_output, re.DOTALL)
-                    if json_match:
-                        personalized_summaries = json.loads(json_match.group())
-                        
-                        # Merge personalized summaries back into products
-                        summary_map = {item["product_id"]: item["personalized_summary"] for item in personalized_summaries}
-                        
-                        for product in products_with_descriptions:
-                            product["personalized_summary"] = summary_map.get(
-                                product["product_id"],
-                                f"{product['description']}"  # Fallback to description if LLM didn't personalize
-                            )
-                    else:
-                        st.warning("⚠️ LLM nu a returnat JSON valid. Folosim descrierile standard.")
+                        result = await Runner.run(
+                            personalization_orchestrator,
+                            prompt,
+                            context=context,
+                            max_turns=3,
+                        )
+                        return result
+
+                    # Execute personalization agent safely so failures don't block UI
+                    try:
+                        with concurrent.futures.ThreadPoolExecutor() as executor:
+                            future = executor.submit(asyncio.run, run_personalization_agent())
+                            agent_result = future.result()
+
+                        # Parse LLM output
+                        agent_output = agent_result.output if hasattr(agent_result, 'output') else str(agent_result)
+
+                        try:
+                            import re
+                            # Extract JSON array from LLM response
+                            json_match = re.search(r'\[.*?\]', agent_output, re.DOTALL)
+                            if json_match:
+                                personalized_summaries = json.loads(json_match.group())
+
+                                # Merge personalized summaries back into products
+                                summary_map = {item["product_id"]: item["personalized_summary"] for item in personalized_summaries}
+
+                                for product in products_with_descriptions:
+                                    product["personalized_summary"] = summary_map.get(
+                                        product["product_id"],
+                                        f"{product['description']}"  # Fallback to description if LLM didn't personalize
+                                    )
+                            else:
+                                st.warning("⚠️ LLM nu a returnat JSON valid. Folosim descrierile standard.")
+                                for product in products_with_descriptions:
+                                    product["personalized_summary"] = product["description"]
+
+                        except Exception as e:
+                            st.warning(f"⚠️ Eroare parsare răspuns LLM: {e}. Folosim descrierile standard.")
+                            for product in products_with_descriptions:
+                                product["personalized_summary"] = product["description"]
+                    except Exception as e:
+                        st.warning(f"⚠️ Personalizarea a eșuat: {e}. Folosim descrierile standard.")
                         for product in products_with_descriptions:
                             product["personalized_summary"] = product["description"]
-                            
-                except Exception as e:
-                    st.warning(f"⚠️ Eroare parsare răspuns LLM: {e}. Folosim descrierile standard.")
+                else:
+                    # Build a concise, actionable summary from justification + recommended action
                     for product in products_with_descriptions:
-                        product["personalized_summary"] = product["description"]
+                        just = product.get("justification") or ""
+                        action = product.get("recommended_action") or ""
+                        combined = just.strip()
+                        if action:
+                            combined = (combined + (" " if combined else "")) + f"Recomandare: {action.strip()}"
+                        product["personalized_summary"] = combined or product.get("description", "")
                 
                 enriched_products = products_with_descriptions
 
-                # STEP 3.5: Generate personalized Romanian titles (no emojis) using Product Title Agent
-                # Build payload from enriched products
-                products_payload = [
-                    {
-                        "product_id": p["product_id"],
-                        "name": p.get("name") or p["product_id"],
-                        "description": p.get("description", ""),
-                        "benefits": p.get("benefits", []),
-                    }
-                    for p in enriched_products
-                ]
-
+                # STEP 3.5: Optional title generation via LLM
                 llm_titles: dict[str, str] = {}
-                try:
-                    async def _run_titles():
-                        prompt = (
-                            "Context utilizator (JSON): "
-                            + user_profile.model_dump_json(ensure_ascii=False)
-                            + "\n\n"
-                            "Produse existente (JSON): "
-                            + json.dumps(products_payload, ensure_ascii=False)
-                            + "\n\n"
-                            "Sarcină: Generează pentru fiecare produs un titlu personalizat, concis și captivant,\n"
-                            "în limba română, potrivit profilului de mai sus. Respectă regulile din instrucțiunile agentului\n"
-                            "și NU folosi emoji-uri în titluri.\n\n"
-                            "Returnează STRICT JSON cu schema: {\n"
-                            "  \"titles\": [\n"
-                            "    {\"product_id\": \"<id>\", \"title\": \"<titlu personalizat>\"}\n"
-                            "  ]\n"
-                            "} (fără text suplimentar)."
-                        )
+                if USE_TITLE_AGENT:
+                    # Build payload from enriched products
+                    products_payload = [
+                        {
+                            "product_id": p["product_id"],
+                            "name": p.get("name") or p["product_id"],
+                            "description": p.get("description", ""),
+                            "benefits": p.get("benefits", []),
+                        }
+                        for p in enriched_products
+                    ]
 
-                        return await Runner.run(product_title_agent, prompt)
-
-                    titles_result = asyncio.run(_run_titles())
-                    raw = titles_result.final_output or "{}"
-                    parsed = {}
                     try:
-                        parsed = json.loads(raw)
-                    except Exception:
-                        start = raw.find("{")
-                        end = raw.rfind("}")
-                        if start != -1 and end != -1 and end > start:
-                            parsed = json.loads(raw[start : end + 1])
-                    for item in parsed.get("titles", []) if isinstance(parsed, dict) else []:
-                        pid = item.get("product_id")
-                        title = item.get("title")
-                        if isinstance(pid, str) and isinstance(title, str):
-                            llm_titles[pid] = title.strip()
-                except Exception as llm_err:
-                    st.warning(f"Nu am putut genera titluri personalizate (LLM): {llm_err}")
+                        async def _run_titles():
+                            prompt = (
+                                "Context utilizator (JSON): "
+                                + user_profile.model_dump_json(ensure_ascii=False)
+                                + "\n\n"
+                                "Produse existente (JSON): "
+                                + json.dumps(products_payload, ensure_ascii=False)
+                                + "\n\n"
+                                "Sarcină: Generează pentru fiecare produs un titlu personalizat, concis și captivant,\n"
+                                "în limba română, potrivit profilului de mai sus. Respectă regulile din instrucțiunile agentului\n"
+                                "și NU folosi emoji-uri în titluri.\n\n"
+                                "Returnează STRICT JSON cu schema: {\n"
+                                "  \"titles\": [\n"
+                                "    {\"product_id\": \"<id>\", \"title\": \"<titlu personalizat>\"}\n"
+                                "  ]\n"
+                                "} (fără text suplimentar)."
+                            )
+
+                            return await Runner.run(product_title_agent, prompt, max_turns=3)
+
+                        titles_result = asyncio.run(_run_titles())
+                        raw = titles_result.final_output or "{}"
+                        parsed = {}
+                        try:
+                            parsed = json.loads(raw)
+                        except Exception:
+                            start = raw.find("{")
+                            end = raw.rfind("}")
+                            if start != -1 and end != -1 and end > start:
+                                parsed = json.loads(raw[start : end + 1])
+                        for item in parsed.get("titles", []) if isinstance(parsed, dict) else []:
+                            pid = item.get("product_id")
+                            title = item.get("title")
+                            if isinstance(pid, str) and isinstance(title, str):
+                                llm_titles[pid] = title.strip()
+                    except Exception as llm_err:
+                        st.warning(f"Nu am putut genera titluri personalizate (LLM): {llm_err}")
 
                 # Prepare UI data: add icons and format for display
                 ICONS = {
@@ -474,11 +527,7 @@ Returnează DOAR un array JSON:
                 # Store in session state to persist across reruns
                 st.session_state.ranked_products = ranked_products
                 st.session_state.llm_titles = llm_titles
-                st.session_state.user_profile_data = {
-                    "age": age,
-                    "annual_income": annual_income,
-                    "marital_status": marital_status
-                }
+                # user_profile_data already stored earlier
                 
                 # Display results
                 st.success("✅ Recomandări generate cu succes!")
@@ -511,7 +560,8 @@ if st.session_state.ranked_products is not None:
                 st.markdown(f"### {idx}. {display_name}")
                 # Match percentage
                 match_percent = int(product['score'] * 100)
-                st.progress(product['score'], text=f"Potrivire: {match_percent}%")
+                st.progress(product['score'])
+                st.caption(f"Potrivire: {match_percent}%")
             with col_select:
                 # Check if product is already selected
                 is_selected = product_id in st.session_state.selected_products
@@ -528,9 +578,10 @@ if st.session_state.ranked_products is not None:
             
 
             # Personalized Romanian recommendation (AI-generated based on user profile)
-            if product.get("personalized_summary"):
+            summary_text = product.get("personalized_summary") or product.get("base_summary") or product.get("description", "")
+            if summary_text:
                 st.markdown("**💡 Recomandare Personalizată:**")
-                st.info(product["personalized_summary"])
+                st.info(summary_text)
             
             # Personalized note for top recommendation
             if idx == 1:

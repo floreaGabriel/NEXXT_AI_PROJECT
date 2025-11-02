@@ -4,6 +4,7 @@ services:
   postgres:
     image: postgres:16-alpine
     container_name: app-postgres
+    platform: linux/amd64
     environment:
       POSTGRES_USER: app
       POSTGRES_PASSWORD: app
