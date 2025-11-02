@@ -31,12 +31,13 @@ from src.agents.email_summary_agent import email_summary_agent
 from src.agents.financial_plan_agent import generate_financial_plan, format_plan_for_display
 from src.agents.pdf_converter_direct import convert_markdown_to_pdf_direct
 from src.utils.db import save_financial_plan
+from src.agents.product_summary_agent import product_summary_agent
 
 """
 Feature flags for LLM-driven enrichments. Disable to avoid extra turns/latency
 and rely solely on the Ranking Agent outputs (justification + recommended_action).
 """
-USE_PERSONALIZATION_AGENT = False
+USE_PERSONALIZATION_AGENT = True
 USE_TITLE_AGENT = False
 
 apply_button_styling()
@@ -259,130 +260,31 @@ if st.button("🔍 Obține Recomandări", type="primary", use_container_width=Tr
                     context = PersonalizationContext(user_profile=user_profile)
 
                     async def run_personalization_agent():
-                        # Build hyper-personalized recommendations based on EVERY detail
-                        personalization_requests = []
-                        for product in products_with_descriptions:
-                            personalization_requests.append({
-                                "product_id": product["product_id"],
-                                "product_name": product["name"],
-                                "product_description": product["description"],
-                                "benefits": product["benefits"],
-                                "relevance_score": product["score"],
-                            })
+                        # Prepare concise product payload
+                        payload = [
+                            {
+                                "product_id": p["product_id"],
+                                "name": p["name"],
+                                "description": p["description"],
+                                "benefits": p.get("benefits", []),
+                                "score": p.get("score", 0.5),
+                            }
+                            for p in products_with_descriptions
+                        ]
 
-                        # Call LLM for deep personalization
-                        prompt = f"""Creează recomandări EXTREM DE PERSONALIZATE pentru fiecare produs bancar bazate pe profilul EXACT al utilizatorului.
-
-PROFIL UTILIZATOR COMPLET:
-- Vârstă: {user_profile.age} ani
-- Venit Anual: {user_profile.annual_income:,.0f} RON/an ({user_profile.annual_income/12:,.0f} RON/lună)
-- Status Angajare: {user_profile.employment_status}
-- Nivel Studii: {user_profile.education_level}
-- Stare Civilă: {user_profile.marital_status}
-- Are Copii: {'Da' if user_profile.has_children else 'Nu'}
-- Toleranță Risc: {user_profile.risk_tolerance}
-- Obiective Financiare: {', '.join(user_profile.financial_goals)}
-
-PRODUSE:
-{json.dumps(personalization_requests, indent=2, ensure_ascii=False)}
-
-INSTRUCȚIUNI CRITICE PENTRU PERSONALIZARE AVANSATĂ:
-
-0. **ADAPTEAZĂ COMPLEXITATEA LIMBAJULUI LA ALFABETIZAREA FINANCIARĂ**:
-   
-   Estimare nivel cunoștințe financiare bazat pe Vârstă + Studii:
-   
-   **NIVEL SCĂZUT** (limbaj simplu, fără termeni tehnici):
-   - Tânăr (<30 ani) + Fără studii superioare/Liceu → explică termeni de bază
-   - Vârstnic (60+ ani) + Fără studii superioare/Liceu → limbaj foarte accesibil
-   - Student indiferent de vârstă → educațional, explică concepte
-   
-   Exemple limbaj simplu:
-   - ✅ "bani pe care îi pui deoparte lunar" 
-   - ❌ "alocări periodice de capital"
-   - ✅ "dobânda = banii în plus pe care îi primești de la bancă"
-   - ❌ "rentabilitatea investiției"
-   - ✅ "împarte riscul între mai multe locuri"
-   - ❌ "diversificare de portofoliu"
-   
-   **NIVEL MEDIU** (termeni bancari comuni + explicații scurte):
-   - 30-50 ani + Facultate/Master
-   - 50+ ani + Facultate/Master
-   
-   Exemple limbaj mediu:
-   - ✅ "diversificare (împărțirea investițiilor în mai multe domenii)"
-   - ✅ "dobândă fixă garantată"
-   - ✅ "capitalizare lunară a dobânzii"
-   
-   **NIVEL AVANSAT** (termeni tehnici fără explicații):
-   - Orice vârstă + Master/Doctorat + venit mare (>100k RON/an)
-   - 35-55 ani + Facultate + venit mare + "investiții" în obiective
-   
-   Exemple limbaj avansat:
-   - ✅ "randament anual efectiv"
-   - ✅ "optimizare fiscală prin deduceri"
-   - ✅ "portofoliu diversificat cu alocare strategică"
-   - ✅ "DAE (Dobândă Anuală Efectivă)"
-
-INSTRUCȚIUNI CRITICE PENTRU PERSONALIZARE AVANSATĂ:
-
-1. **SPECIFICĂ SUME CONCRETE ÎN RON** adaptate la venitul și situația utilizatorului:
-   - Pentru investiții: recomandă % din venit sau sume lunare concrete
-   - Pentru credite: calculează capacitate de plată (max 40% din venit)
-   - Pentru economii: sugerează praguri realiste (3-6 luni cheltuieli = rezervă urgență)
-
-2. **ADAPTEAZĂ LA FIECARE DETALIU**:
-   - Vârstă 20 ani angajat → "la început de carieră, construiește fundația financiară"
-   - Vârstă 20 ani student → "concentrează-te pe educație financiară și economii mici"
-   - Vârstă 20 ani șomer dar venit anual → "probabil sprijin familial, învață să gestionezi bani"
-   - Vârstă 35 ani cu copii → "responsabilități familiale, prioritate securitate"
-   - Vârstă 50 ani fără copii → "maximizează investiții pentru pensionare"
-
-3. **TON ȘI LIMBAJ ADAPTAT**:
-   - Tânăr (18-25): ton prietenos, casual, educativ, "Ai", "începi", "construiești"
-   - Mediu (26-45): ton profesionist, practic, "Gestionezi", "optimizezi", "planifici"
-   - Senior (46+): ton respectuos, orientat securitate, "Asigurați", "protejați", "mențineti"
-
-4. **RECOMANDĂRI SPECIFICE BAZATE PE CONTEXT**:
-
-   Exemple concrete:
-   
-   - **Plan investiții pentru 20 ani angajat, 3000 RON/lună, risc mediu:**
-     "La 20 de ani și cu un venit stabil de 3.000 RON/lună, poți începe cu investiții lunare de 300-500 RON (10-15% din venit) în fonduri mixte. Orizontul lung de timp (40 ani până la pensie) îți permite să beneficiezi de puterea dobânzii compuse."
-   
-   - **Plan investiții pentru 20 ani șomer, 20.000 RON/an venit (probabil părinți):**
-     "Cu un venit anual de 20.000 RON (probabil sprijin familial), focusează-te mai întâi pe educație financiară și economii de urgență (minim 10.000 RON). Apoi, începe investiții mici de 100-200 RON/lună pentru a învăța despre piață fără riscuri mari."
-   
-   - **Credit ipotecar pentru 35 ani angajat, 8000 RON/lună, căsătorit cu copii:**
-     "Cu venitul familiei de 8.000 RON/lună și responsabilități către copii, poți accesa un credit de până la 150.000-200.000 EUR (rată max 3.200 RON/lună = 40% din venit). Prioritizează avansul minim 15% pentru dobândă mai bună."
-   
-   - **Cont economii pentru 22 ani student, 15.000 RON/an:**
-     "Ca student cu venituri limitate de 1.250 RON/lună, creează o rezervă de urgență de 5.000-7.500 RON (4-6 luni). Acest cont cu retrageri gratuite este perfect pentru accesibilitate când ai nevoie rapid de bani pentru taxe sau emergențe."
-
-5. **PĂSTREAZĂ ACURATEȚEA**: 
-   - NU inventa beneficii sau termeni care nu sunt în description
-   - NU schimba informații despre dobânzi, perioade, comisioane
-   - Folosește description ca sursă de adevăr pentru caracteristicile produsului
-
-6. **FORMAT OUTPUT**: 
-   - Maxim 4-5 propoziții
-   - Include recomandare concretă (sumă RON sau strategie)
-   - Explică DE CE această sumă/strategie se potrivește profilului
-   - Limbaj accesibil dar profesionist
-
-Returnează DOAR un array JSON:
-[
-  {{"product_id": "...", "personalized_summary": "..."}},
-  ...
-]"""
-
-                        result = await Runner.run(
-                            personalization_orchestrator,
-                            prompt,
-                            context=context,
-                            max_turns=3,
+                        # One-shot prompt for single-turn agent
+                        prompt = (
+                            "Context utilizator (JSON): "
+                            + user_profile.model_dump_json(ensure_ascii=False)
+                            + "\n\nProduse (JSON): "
+                            + json.dumps(payload, ensure_ascii=False)
+                            + "\n\nSarcină: Pentru fiecare produs, redactează un sumar scurt în română, product-first, cu o adaptare discretă la profil.\n"
+                            + "Structură: (1) Prezentare produs, (2) Potrivire pentru profil, (3) Recomandare concretă sau beneficiu principal.\n"
+                            + "Lungime: 3–4 propoziții, max 450 caractere, fără emoji-uri.\n\n"
+                            + "Returnează STRICT JSON: {\\\"summaries\\\": [{\\\"product_id\\\": \\\"...\\\", \\\"personalized_summary\\\": \\\"...\\\"}]}"
                         )
-                        return result
+
+                        return await Runner.run(product_summary_agent, prompt, max_turns=1)
 
                     # Execute personalization agent safely so failures don't block UI
                     try:
@@ -422,14 +324,74 @@ Returnează DOAR un array JSON:
                         for product in products_with_descriptions:
                             product["personalized_summary"] = product["description"]
                 else:
-                    # Build a concise, actionable summary from justification + recommended action
+                    # Build a concise, actionable Romanian summary focused on product presentation
+                    def _first_sentence(text: str) -> str:
+                        if not isinstance(text, str) or not text:
+                            return ""
+                        # Split on sentence enders and return first non-empty
+                        import re
+                        parts = re.split(r"(?<=[\.!?])\s+", text.strip())
+                        return parts[0].strip() if parts else text.strip()
+
+                    def _safe_int(x, default=0):
+                        try:
+                            return int(x)
+                        except Exception:
+                            return default
+
+                    # Prepare simple profile signals for templating
+                    profile_age = _safe_int(age, 0)
+                    profile_income = float(annual_income) if isinstance(annual_income, (int, float)) else 0.0
+                    profile_risk = (risk_tolerance or "").lower()
+                    goals_lower = [g.lower() for g in (financial_goals or [])]
+
+                    def _why_fit_clause():
+                        reasons = []
+                        if profile_age and profile_age <= 25:
+                            reasons.append("vârsta tânără îți permite să construiești pe termen lung")
+                        elif profile_age and profile_age >= 45:
+                            reasons.append("prioritatea este siguranța și planificarea pe termen mediu-lung")
+                        if "investiții" in goals_lower:
+                            reasons.append("obiectivul de investiții se potrivește cu structura produsului")
+                        if "economii pe termen lung" in goals_lower or "economii pe termen scurt" in goals_lower:
+                            reasons.append("sprijină disciplina de economisire")
+                        if profile_risk in ("scăzută", "scazuta"):
+                            reasons.append("potrivit pentru risc scăzut")
+                        elif profile_risk == "medie":
+                            reasons.append("echilibru între siguranță și randament")
+                        elif profile_risk == "ridicată" or profile_risk == "ridicata":
+                            reasons.append("permite potențial de creștere mai mare, cu volatilitate")
+                        return ", ".join(reasons) if reasons else "se potrivește profilului tău financiar"
+
+                    def _recommended_amount():
+                        # Heuristic: ~10% din venitul lunar, rotunjit la 50 RON
+                        if profile_income and profile_income > 0:
+                            monthly = profile_income / 12.0
+                            base = max(100, min(1000, int((monthly * 0.1) // 50 * 50)))
+                            return base
+                        return 300
+
                     for product in products_with_descriptions:
-                        just = product.get("justification") or ""
-                        action = product.get("recommended_action") or ""
-                        combined = just.strip()
-                        if action:
-                            combined = (combined + (" " if combined else "")) + f"Recomandare: {action.strip()}"
-                        product["personalized_summary"] = combined or product.get("description", "")
+                        name = product.get("name") or product.get("product_id", "Produs bancar")
+                        desc_first = _first_sentence(product.get("description", "").strip())
+                        just = (product.get("justification") or "").strip()
+                        action = (product.get("recommended_action") or "").strip()
+
+                        why = _why_fit_clause()
+                        amount = _recommended_amount()
+
+                        # Prefer provided action if present; otherwise craft one
+                        if not action:
+                            action = f"Începe cu {amount} RON/lună și ajustează după 2-3 luni în funcție de confortul tău."
+
+                        # Final Romanian, product-first summary (max ~4 sentences)
+                        summary_ro = (
+                            f"Prezentare produs: {name} — {desc_first}. "
+                            f"De ce ți se potrivește: {why}. "
+                            f"Recomandare concretă: {action} "
+                        )
+
+                        product["personalized_summary"] = summary_ro.strip()
                 
                 enriched_products = products_with_descriptions
 
