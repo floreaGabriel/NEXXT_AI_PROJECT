@@ -7,6 +7,22 @@ Flow:
 4. Display personalized content to user
 """
 
+from __future__ import annotations
+
+import streamlit as st
+import streamlit.components.v1 as components
+import html
+import unicodedata
+import asyncio
+import json
+from collections import defaultdict
+from typing import Dict, List, Tuple, Optional
+from agents import Runner
+import os
+from pydantic import ValidationError
+
+from src.config.settings import AWS_BEDROCK_API_KEY
+
 import streamlit as st
 import asyncio
 import json
@@ -32,6 +48,10 @@ from src.agents.financial_plan_agent import generate_financial_plan, format_plan
 from src.agents.pdf_converter_direct import convert_markdown_to_pdf_direct
 from src.utils.db import save_financial_plan
 from src.agents.product_summary_agent import product_summary_agent
+from src.agents.bank_term_extractor_agent import (
+    bank_term_extractor_agent,
+    ExtractionResult,
+)
 
 """
 Feature flags for LLM-driven enrichments. Disable to avoid extra turns/latency
@@ -39,6 +59,293 @@ and rely solely on the Ranking Agent outputs (justification + recommended_action
 """
 USE_PERSONALIZATION_AGENT = True
 USE_TITLE_AGENT = False
+
+# Categories and colors for bank term highlighting
+ALLOWED_CATEGORIES = ["Products", "Rates", "Fees"]
+CATEGORY_COLORS: Dict[str, str] = {
+    "Products": "#fcd34d",  # amber-300 (darker yellow)
+    "Rates": "#fde68a",     # amber-200 (medium yellow)
+    "Fees": "#fef3c7",      # amber-100 (light yellow)
+}
+
+
+async def run_agent_extraction(text: str) -> Optional[ExtractionResult]:
+    """Call the Bank Term Extractor agent and return a validated ExtractionResult or None."""
+    prompt = (
+        "Extract bank-related terms from the following text. Return ONLY strict JSON with\n"
+        "keys 'categories' and 'spans' as previously defined. Do not include explanations.\n\n"
+        f"Text:\n{text}"
+    )
+    try:
+        result = await Runner.run(bank_term_extractor_agent, prompt)
+        raw = result.final_output or ""
+        # Some LLMs might return extra text; try to isolate JSON
+        try:
+            data = json.loads(raw)
+        except Exception:
+            start = raw.find("{")
+            end = raw.rfind("}")
+            if start != -1 and end != -1 and end > start:
+                data = json.loads(raw[start : end + 1])
+            else:
+                return None
+        # Validate into class
+        try:
+            return ExtractionResult.model_validate(data)
+        except ValidationError:
+            return None
+    except Exception:
+        return None
+    return None
+
+
+def highlight_bank_terms_html(text: str, product_id: str) -> str:
+    """
+    Extract bank terms from text and return HTML with highlighted terms and context menu.
+    Uses the exact same logic as Bank_Term_Highlighter page.
+    
+    Args:
+        text: The text to highlight
+        product_id: Unique identifier for this product (used for unique component key)
+    
+    Returns:
+        HTML string with highlighted terms and interactive context menu
+    """
+    if not text or not text.strip():
+        return f"<div style='white-space:pre-wrap; line-height:1.8;'>{html.escape(text)}</div>"
+    
+    # Run extraction synchronously (we're already in async context from Streamlit)
+    try:
+        validated = asyncio.run(run_agent_extraction(text))
+    except Exception:
+        # If extraction fails, return plain text
+        return f"<div style='white-space:pre-wrap; line-height:1.8;'>{html.escape(text)}</div>"
+    
+    matches: List[Tuple[int, int, str, str]] = []
+    tokens_by_cat: Dict[str, set] = defaultdict(set)
+    
+    if validated:
+        # Collect tokens from typed categories
+        for cat in ALLOWED_CATEGORIES:
+            for t in getattr(validated.categories, cat):
+                tokens_by_cat[cat].add(t.strip())
+    
+    # Normalize spans to whole words (no punctuation, no partial words)
+    def _is_word_char(ch: str) -> bool:
+        if not ch:
+            return False
+        cat = unicodedata.category(ch)
+        return cat.startswith("L") or cat.startswith("N") or cat.startswith("M")
+    
+    def _word_boundary_ok(start: int, end: int) -> bool:
+        # start boundary
+        if start > 0 and _is_word_char(text[start - 1]):
+            return False
+        # end boundary
+        if end < len(text) and _is_word_char(text[end]):
+            return False
+        return True
+    
+    def _find_all_occurrences(hay: str, needle: str) -> List[Tuple[int, int]]:
+        """Case-insensitive search for all occurrences with word-boundary checks."""
+        res: List[Tuple[int, int]] = []
+        if not needle:
+            return res
+        low_hay = hay.lower()
+        low_need = needle.lower()
+        i = 0
+        while True:
+            i = low_hay.find(low_need, i)
+            if i == -1:
+                break
+            j = i + len(needle)
+            if _word_boundary_ok(i, j):
+                res.append((i, j))
+            i = i + 1
+        return res
+    
+    token_spans: List[Tuple[int, int, str, str]] = []
+    # Prefer longer tokens to avoid partial overlaps (e.g., 'card' vs 'credit card')
+    all_cat_tokens: List[Tuple[str, str]] = []  # (cat, token)
+    for cat, toks in tokens_by_cat.items():
+        for t in toks:
+            all_cat_tokens.append((cat, t))
+    all_cat_tokens.sort(key=lambda ct: -len(ct[1]))
+    
+    used_intervals: List[Tuple[int, int]] = []
+    for cat, tok in all_cat_tokens:
+        for s, e in _find_all_occurrences(text, tok):
+            # Skip if overlaps an already selected interval
+            if any(not (e <= us or s >= ue) for us, ue in used_intervals):
+                continue
+            token_spans.append((s, e, cat, text[s:e]))
+            used_intervals.append((s, e))
+    
+    # Sort by position for rendering
+    matches = sorted(token_spans, key=lambda t: t[0])
+    
+    # Build HTML with highlighted terms
+    html_parts: List[str] = []
+    term_index = 0
+    last = 0
+    
+    for s, e, cat, seg_text in matches:
+        if s > last:
+            html_parts.append(html.escape(text[last:s]))
+        color = CATEGORY_COLORS.get(cat, "#e5e7eb")
+        # Create a clickable span with data attributes for the context menu
+        html_parts.append(
+            f"<span class='highlighted-term' "
+            f"data-term='{html.escape(seg_text)}' "
+            f"data-category='{html.escape(cat)}' "
+            f"data-index='{term_index}' "
+            f"style='background:{color}; padding:0.1rem 0.2rem; border-radius:0.25rem; cursor:pointer;'>"
+            f"{html.escape(seg_text)}"
+            f"</span>"
+        )
+        last = e
+        term_index += 1
+    
+    if last < len(text):
+        html_parts.append(html.escape(text[last:]))
+    
+    # Custom HTML with context menu using components.html
+    context_menu_html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <style>
+            body {{
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+                margin: 0;
+                padding: 12px;
+                background: #e0f2fe;
+                border-radius: 8px;
+            }}
+            .context-menu {{
+                display: none;
+                position: fixed;
+                background: white;
+                border: 1px solid #ccc;
+                border-radius: 8px;
+                box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+                z-index: 10000;
+                padding: 8px 0;
+                min-width: 200px;
+            }}
+            .context-menu.active {{
+                display: block;
+            }}
+            .context-menu-item {{
+                padding: 10px 20px;
+                cursor: pointer;
+                transition: background 0.2s;
+                border-bottom: 1px solid #f0f0f0;
+            }}
+            .context-menu-item:last-child {{
+                border-bottom: none;
+            }}
+            .context-menu-item:hover {{
+                background: #f5f5f5;
+            }}
+            .context-menu-header {{
+                padding: 8px 20px;
+                font-weight: bold;
+                color: #666;
+                border-bottom: 2px solid #e0e0e0;
+                margin-bottom: 4px;
+                font-size: 0.9em;
+            }}
+            .highlighted-term {{
+                cursor: pointer;
+                transition: opacity 0.2s;
+            }}
+            .highlighted-term:hover {{
+                opacity: 0.8;
+            }}
+            #highlightedText {{
+                white-space: pre-wrap;
+                line-height: 1.8;
+                color: #1e3a8a;
+            }}
+        </style>
+    </head>
+    <body>
+        <div id="contextMenu" class="context-menu">
+            <div class="context-menu-header" id="menuHeader">Term Options</div>
+            <div class="context-menu-item" onclick="handleMenuAction('explain')">
+                💡 Explain
+            </div>
+            <div class="context-menu-item" onclick="handleMenuAction('voice')">
+                🔊 Voice Explain
+            </div>
+        </div>
+        
+        <div id="highlightedText">
+            {"".join(html_parts)}
+        </div>
+        
+        <script>
+            (function() {{
+                const contextMenu = document.getElementById('contextMenu');
+                const menuHeader = document.getElementById('menuHeader');
+                let currentTerm = null;
+                let currentCategory = null;
+                
+                // Add event listeners to all highlighted terms
+                document.querySelectorAll('.highlighted-term').forEach(term => {{
+                    term.addEventListener('contextmenu', function(e) {{
+                        e.preventDefault();
+                        
+                        currentTerm = this.getAttribute('data-term');
+                        currentCategory = this.getAttribute('data-category');
+                        
+                        // Update menu header
+                        menuHeader.textContent = currentTerm + ' (' + currentCategory + ')';
+                        
+                        // Position the menu
+                        contextMenu.style.left = e.pageX + 'px';
+                        contextMenu.style.top = e.pageY + 'px';
+                        contextMenu.classList.add('active');
+                    }});
+                }});
+                
+                // Close menu when clicking elsewhere
+                document.addEventListener('click', function(e) {{
+                    if (!contextMenu.contains(e.target)) {{
+                        contextMenu.classList.remove('active');
+                    }}
+                }});
+                
+                // Handle menu actions
+                window.handleMenuAction = function(action) {{
+                    if (!currentTerm) return;
+                    
+                    // Send message to Streamlit parent
+                    window.parent.postMessage({{
+                        type: 'streamlit:setComponentValue',
+                        key: 'bank_term_action_{product_id}',
+                        value: {{
+                            action: action,
+                            term: currentTerm,
+                            category: currentCategory,
+                            timestamp: Date.now()
+                        }}
+                    }}, '*');
+                    
+                    // Close menu
+                    contextMenu.classList.remove('active');
+                    
+                    // Visual feedback
+                    alert(action.charAt(0).toUpperCase() + action.slice(1) + ' action for: ' + currentTerm);
+                }};
+            }})();
+        </script>
+    </body>
+    </html>
+    """
+    
+    return context_menu_html
 
 apply_button_styling()
 render_sidebar_info()
@@ -543,7 +850,9 @@ if st.session_state.ranked_products is not None:
             summary_text = product.get("personalized_summary") or product.get("base_summary") or product.get("description", "")
             if summary_text:
                 st.markdown("**💡 Recomandare Personalizată:**")
-                st.info(summary_text)
+                # Render summary with bank term highlighting and context menu
+                highlighted_html = highlight_bank_terms_html(summary_text, product_id)
+                components.html(highlighted_html, height=200, scrolling=True)
             
             # Personalized note for top recommendation
             if idx == 1:
