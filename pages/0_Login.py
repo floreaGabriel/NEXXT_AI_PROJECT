@@ -24,13 +24,6 @@ render_sidebar_info()
 st.title("Autentificare")
 
 # Top nav shortcuts
-col_nav1, col_nav2 = st.columns(2)
-with col_nav1:
-    if st.button("Nu ai cont? Înregistrează-te →", use_container_width=True):
-        st.switch_page("pages/1_Register.py")
-with col_nav2:
-    if st.button("Recomandări produse →", use_container_width=True):
-        st.switch_page("pages/2_Product_Recommendations_Florea.py")
 
 st.divider()
 
@@ -79,14 +72,21 @@ with st.form("login_form", clear_on_submit=False, border=True):
             st.session_state["auth"] = {"logged_in": True, "email": email}
             st.session_state["user_profile"] = user_profile
             st.session_state["redirect_to_recommendations"] = True
-            st.success("Autentificare reușită!")
+            st.success("Autentificare reușită! Redirecționare către recomandări...")
         else:
             st.error("Email sau parolă invalide.")
 
 # Handle redirect after successful login (outside form)
 if st.session_state.get("redirect_to_recommendations"):
     st.session_state.pop("redirect_to_recommendations")
-    if st.button("Continuă la Recomandări →", type="primary", use_container_width=True):
-        st.switch_page("pages/2_Product_Recommendations_Florea.py")
+    st.rerun()
 
-st.caption("Demo: autentificare cu suport pentru baza de date.")
+# Check if user is logged in and redirect automatically
+if st.session_state.get("auth", {}).get("logged_in") and "user_profile" in st.session_state:
+    st.switch_page("pages/2_Product_Recommendations_Florea.py")
+
+st.divider()
+
+if st.button("Nu ai cont? Înregistrează-te →", use_container_width=True):
+    st.switch_page("pages/1_Register.py")
+

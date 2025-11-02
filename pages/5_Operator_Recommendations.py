@@ -28,9 +28,7 @@ from src.agents.financial_plan_agent import generate_financial_plan, format_plan
 from src.agents.pdf_converter_direct import convert_markdown_to_pdf_direct
 from src.utils.db import save_financial_plan, get_user_by_email
 
-"""
-Feature flags - DISABLED for operator view (no AI summaries, just rankings)
-"""
+
 USE_PERSONALIZATION_AGENT = False
 USE_TITLE_AGENT = False
 

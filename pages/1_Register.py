@@ -23,14 +23,7 @@ render_sidebar_info()
 
 st.title("Înregistrare cont")
 
-# Top nav shortcuts
-col_nav1, col_nav2 = st.columns(2)
-with col_nav1:
-    if st.button("Ai deja cont? Autentifică-te →", use_container_width=True):
-        st.switch_page("pages/0_Login.py")
-with col_nav2:
-    if st.button("Recomandări produse →", use_container_width=True):
-        st.switch_page("pages/2_Product_Recommendations_Florea.py")
+
 
 st.divider()
 
@@ -61,9 +54,47 @@ with st.form("register_form", clear_on_submit=False, border=True):
     )
 
     has_children = st.checkbox("Aveți copii?", value=False, key="reg_has_children")
-    num_children = 0
+    
+    # Show number of children input only if user has children
     if has_children:
         num_children = st.number_input("Număr copii", min_value=1, max_value=10, value=1, step=1, key="reg_num_children")
+    else:
+        num_children = 0
+
+    st.subheader("Profil financiar")
+    
+    annual_income = st.number_input(
+        "Venit anual (RON)", 
+        min_value=0, 
+        max_value=1000000, 
+        value=60000, 
+        step=5000, 
+        key="reg_annual_income",
+        help="Venitul dumneavoastră anual brut în lei"
+    )
+    
+    risk_tolerance = st.selectbox(
+        "Toleranță la risc",
+        ["Scăzută", "Medie", "Ridicată"],
+        index=1,
+        key="reg_risk_tolerance",
+        help="Cât de confortabil vă simțiți cu investiții riscante?"
+    )
+    
+    financial_goals = st.multiselect(
+        "Obiective financiare",
+        [
+            "Economii pe termen lung",
+            "Cumpărare casă",
+            "Educație copii",
+            "Pensionare confortabilă",
+            "Investiții cu randament ridicat",
+            "Fond de urgență"
+        ],
+        default=["Economii pe termen lung"],
+        key="reg_financial_goals",
+        help="Selectați unul sau mai multe obiective"
+    )
 
     submitted = st.form_submit_button("Creează cont", type="primary", use_container_width=True)
 
@@ -87,15 +118,15 @@ with st.form("register_form", clear_on_submit=False, border=True):
             if email in users or existing_user_db is not None:
                 st.error("Există deja un cont cu acest email.")
             else:
-                # Mock pentru câmpurile nespecificate
+                # Build complete profile with user inputs
                 profile = {
                     "marital_status": marital_status,
-                    "annual_income": 60000.0,  # mock
+                    "annual_income": float(annual_income),
                     "age": int(age),
                     "employment_status": employment_status,
                     "has_children": bool(has_children),
-                    "risk_tolerance": "Medie",  # mock
-                    "financial_goals": ["Economii pe termen lung"],  # mock
+                    "risk_tolerance": risk_tolerance,
+                    "financial_goals": financial_goals if financial_goals else ["Economii pe termen lung"],
                     "first_name": first_name,
                     "last_name": last_name,
                     "number_of_children": int(num_children) if has_children else 0,
@@ -109,7 +140,6 @@ with st.form("register_form", clear_on_submit=False, border=True):
                 st.session_state["auth"] = {"logged_in": True, "email": email}
                 st.session_state["user_profile"] = profile
                 st.session_state["redirect_to_recommendations"] = True
-                st.success("Cont creat cu succes și autentificat!")
 
                 # Persist in Postgres (if configured)
                 try:
@@ -124,19 +154,27 @@ with st.form("register_form", clear_on_submit=False, border=True):
                         "employment_status": employment_status,
                         "has_children": bool(has_children),
                         "number_of_children": int(num_children) if has_children else 0,
-                        # Extras go here (flexible):
-                        "annual_income": 60000.0,
-                        "risk_tolerance": "Medie",
-                        "financial_goals": ["Economii pe termen lung"],
+                        # Extras go into JSONB (flexible):
+                        "annual_income": float(annual_income),
+                        "risk_tolerance": risk_tolerance,
+                        "financial_goals": financial_goals if financial_goals else ["Economii pe termen lung"],
                     })
-                    st.success("Utilizator salvat în baza de date.")
+                    st.success("Cont creat cu succes! Redirecționare către recomandări...")
                 except Exception as db_err:
                     st.warning(f"Nu am putut salva în baza de date: {db_err}")
 
 # Handle redirect after successful registration (outside form)
 if st.session_state.get("redirect_to_recommendations"):
     st.session_state.pop("redirect_to_recommendations")
-    if st.button("Continuă la Recomandări →", type="primary", use_container_width=True):
-        st.switch_page("pages/2_Product_Recommendations_Florea.py")
+    st.rerun()
+    
+# Check if user is logged in and redirect automatically
+if st.session_state.get("auth", {}).get("logged_in") and "user_profile" in st.session_state:
+    st.switch_page("pages/2_Product_Recommendations_Florea.py")
 
-st.caption("Demo: înregistrare cu salvare în baza de date PostgreSQL.")
+st.divider()
+
+# Top nav shortcuts
+if st.button("Ai deja cont? Autentifică-te →", use_container_width=True):
+    st.switch_page("pages/0_Login.py")
+
