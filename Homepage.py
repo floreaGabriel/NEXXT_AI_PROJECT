@@ -31,8 +31,8 @@ if logged_in:
         st.Page("pages/2_Product_Recommendations_Florea.py", title="Recomandări produse", icon="🎯"),
         st.Page("pages/5_Operator_Recommendations.py", title="Operator - Recomandări Client", icon="👔"),
         st.Page("pages/6_Risk_Management.py", title="Risk Management", icon="⚠️"),
-        st.Page("pages/3_Bedrock_Chat_Test.py", title="Bedrock Chat", icon="💬"),
-        st.Page("pages/4_Bank_Term_Highlighter.py", title="Bank Term Highlighter", icon="🔎"),
+        # st.Page("pages/3_Bedrock_Chat_Test.py", title="Bedrock Chat", icon="💬"),
+        # st.Page("pages/4_Bank_Term_Highlighter.py", title="Bank Term Highlighter", icon="🔎"),
     ]
 
 nav = st.navigation(sections)

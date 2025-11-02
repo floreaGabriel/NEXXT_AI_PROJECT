@@ -1,4 +1,4 @@
-"""SMTP email helper used by the Email Summary Agent and UI.
+"""IS NOT USED------OLD VERSION HERE: (NO MCP) SMTP email helper used by the Email Summary Agent and UI.
 
 Env vars:
   - SMTP_HOST (required)

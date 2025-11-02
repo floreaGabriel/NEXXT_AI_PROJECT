@@ -23,6 +23,7 @@ from src.agents.product_recommendation_agent import (
     rank_products_for_profile,  # Direct function for ranking
     _get_products_catalog_dict,  # Import catalog from agent
 )
+from src.agents.operator_guidance_agent import generate_operator_guidance  # NEW: Operator guidance
 from src.agents.email_summary_agent import email_summary_agent
 from src.agents.financial_plan_agent import generate_financial_plan, format_plan_for_display
 from src.agents.pdf_converter_direct import convert_markdown_to_pdf_direct
@@ -185,11 +186,48 @@ if st.button("🔍 Caută Client și Generează Recomandări", type="primary", u
                         "asigurare_viata_economii": "🛡️",
                     }
 
-                    # Format for UI
+                    # STEP 3: Generate operator guidance for each product
+                    st.info("🤖 Generăm ghiduri de abordare personalizate pentru operator...")
+                    
+                    # Prepare client profile for guidance generation
+                    client_profile_for_guidance = {
+                        "age": user_data.get('age'),
+                        "education_level": extra.get('education_level', 'facultate'),
+                        "annual_income": extra.get('annual_income', 50000),
+                        "marital_status": user_data.get('marital_status'),
+                        "has_children": user_data.get('has_children', False),
+                        "employment_status": user_data.get('employment_status'),
+                        "risk_tolerance": extra.get('risk_tolerance', 'medium'),
+                    }
+                    
+                    # Format for UI with operator guidance
                     products_for_ui = []
-                    for enriched_product in products_with_descriptions:
+                    for idx, enriched_product in enumerate(products_with_descriptions, 1):
                         pid = enriched_product["product_id"]
                         icon = ICONS.get(pid, "🏦")
+                        
+                        # Generate operator guidance for this specific client-product combination
+                        st.caption(f"Generăm ghid pentru produsul {idx}/{len(products_with_descriptions)}: {enriched_product.get('name', pid)}")
+                        
+                        try:
+                            operator_guidance = generate_operator_guidance(
+                                client_profile=client_profile_for_guidance,
+                                product_info={
+                                    "product_name": enriched_product.get("name", pid),
+                                    "description": enriched_product.get("description", ""),
+                                    "benefits": enriched_product.get("benefits", []),
+                                }
+                            )
+                        except Exception as e:
+                            # Fallback if guidance generation fails
+                            operator_guidance = {
+                                "communication_tone": "profesional",
+                                "financial_literacy_level": "mediu",
+                                "recommended_approach": f"Prezentați produsul {enriched_product.get('name', pid)} clientului, adaptând comunicarea la profilul său.",
+                                "key_phrases_to_use": [],
+                                "terms_to_avoid": [],
+                                "concrete_example": ""
+                            }
                         
                         products_for_ui.append(
                             (
@@ -200,6 +238,7 @@ if st.button("🔍 Caută Client și Generează Recomandări", type="primary", u
                                     "description": enriched_product.get("description", ""),
                                     "benefits": enriched_product.get("benefits", []),
                                     "score": enriched_product["score"],
+                                    "operator_guidance": operator_guidance,  # NEW: Add guidance
                                 },
                             )
                         )
@@ -243,7 +282,7 @@ if st.session_state.ranked_products is not None:
     
     ranked_products = st.session_state.ranked_products
 
-    # Display products in ranked order (SIMPLIFIED - NO SUMMARIES)
+    # Display products in ranked order with OPERATOR GUIDANCE
     for idx, (product_id, product) in enumerate(ranked_products, 1):
         with st.container(border=True):
             # Product header with selection button
@@ -270,6 +309,42 @@ if st.session_state.ranked_products is not None:
                     if st.button("➕ Selectează", key=f"select_{product_id}", type="primary", use_container_width=True):
                         st.session_state.selected_products.append(product_id)
                         st.rerun()
+            
+            # OPERATOR GUIDANCE SECTION (replaces generic description)
+            if "operator_guidance" in product:
+                guidance = product["operator_guidance"]
+                
+                st.markdown("---")
+                st.markdown("### 💬 Ghid Abordare Operator")
+                
+                # Display main approach guidance
+                st.markdown(f"**{guidance.get('recommended_approach', '')}**")
+                
+                # Display additional details in expandable section
+                with st.expander("📋 Detalii Comunicare", expanded=False):
+                    col_left, col_right = st.columns(2)
+                    
+                    with col_left:
+                        st.markdown(f"**🎯 Ton:** {guidance.get('communication_tone', 'N/A')}")
+                        st.markdown(f"**📚 Nivel Financiar:** {guidance.get('financial_literacy_level', 'N/A')}")
+                        
+                        # Key phrases to use
+                        if guidance.get('key_phrases_to_use'):
+                            st.markdown("**✅ Fraze recomandate:**")
+                            for phrase in guidance.get('key_phrases_to_use', []):
+                                st.markdown(f"- _{phrase}_")
+                    
+                    with col_right:
+                        # Terms to avoid
+                        if guidance.get('terms_to_avoid'):
+                            st.markdown("**❌ Termeni de evitat:**")
+                            for term in guidance.get('terms_to_avoid', []):
+                                st.markdown(f"- ~~{term}~~")
+                        
+                        # Concrete example
+                        if guidance.get('concrete_example'):
+                            st.markdown("**💡 Exemplu concret:**")
+                            st.info(guidance.get('concrete_example', ''))
     
     # Display selected products summary
     if st.session_state.selected_products:
