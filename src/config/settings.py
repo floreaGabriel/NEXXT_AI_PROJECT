@@ -11,7 +11,18 @@ load_dotenv()
 import os as _os
 _os.environ["AGENTS_TRACING_DISABLED"] = "true"
 _os.environ["OPENAI_TRACING_DISABLED"] = "true"
+_os.environ["LITELLM_TELEMETRY"] = "False"
+_os.environ["LITELLM_LOG"] = "ERROR"
 _os.environ.pop("OPENAI_API_KEY", None)
+
+# Additional tracing disables for Agents SDK
+_os.environ["AGENTS_DISABLE_TRACING"] = "true"
+_os.environ["OPENAI_LOG"] = "error"
+
+# Disable LiteLLM success/failure callbacks and logging
+_os.environ["LITELLM_SUCCESS_CALLBACK"] = ""
+_os.environ["LITELLM_FAILURE_CALLBACK"] = ""
+_os.environ["LITELLM_DROP_PARAMS"] = "True"
 
 # API Configuration
 # Legacy support (some pages may still reference this)
@@ -30,12 +41,12 @@ APP_ICON = "assets/Raiffeisen_Bank.svg"
 # Default to Claude 4.5 Sonnet via Anthropic provider; can be overridden via env
 DEFAULT_LITELLM_MODEL = os.getenv(
 	"DEFAULT_LITELLM_MODEL",
-	"global.anthropic.claude-sonnet-4-5-20250929-v1:0",
+	"global.anthropic.claude-sonnet-4-20250514-v1:0",
 )
 TEMPERATURE = 0.7
 
 # Agent Configuration
-MAX_TURNS = 10
+MAX_TURNS = 5  # Reduced from 10 - agents should respond in 1-2 turns with clear instructions
 
 # Helpers to construct models for Agents SDK
 try:

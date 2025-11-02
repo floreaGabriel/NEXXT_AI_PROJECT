@@ -3,15 +3,17 @@
 Uses psycopg (v3) and environment variables for configuration:
 APP_DB_HOST, APP_DB_PORT, APP_DB_USER, APP_DB_PASSWORD, APP_DB_NAME, APP_DB_SSLMODE
 
-Schema: a flexible `users` table with core columns and an `extra` JSONB column
-to allow easy enrichment without migrations.
+Schema: 
+- `users` table with core columns and an `extra` JSONB column
+- `products` table for banking products from markdown files
 """
 
 from __future__ import annotations
 
 import json
 import os
-from typing import Any, Dict
+from pathlib import Path
+from typing import Any, Dict, List
 
 import psycopg
 from dotenv import load_dotenv
@@ -66,6 +68,23 @@ def init_users_table() -> None:
         updated_at TIMESTAMPTZ DEFAULT now()
     );
     CREATE INDEX IF NOT EXISTS users_email_idx ON users (email);
+    """
+    with _conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql)
+
+
+def init_products_table() -> None:
+    """Create products table if missing."""
+    sql = """
+    CREATE TABLE IF NOT EXISTS products (
+        id SERIAL PRIMARY KEY,
+        product_name TEXT UNIQUE NOT NULL,
+        product_description TEXT NOT NULL,
+        created_at TIMESTAMPTZ DEFAULT now(),
+        updated_at TIMESTAMPTZ DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS products_name_idx ON products (product_name);
     """
     with _conn() as conn:
         with conn.cursor() as cur:
@@ -193,4 +212,161 @@ def save_financial_plan(email: str, plan_text: str) -> bool:
     except Exception as e:
         print(f"Error saving financial plan: {e}")
         return False
+
+
+def populate_products(products_dir: str | None = None) -> int:
+    """
+    Populate products table from markdown files in products directory.
+    
+    Args:
+        products_dir: Path to products directory. If None, uses default '../products'
+        
+    Returns:
+        Number of products inserted/updated
+    """
+    if products_dir is None:
+        # Get the directory relative to this file
+        current_file = Path(__file__)
+        products_dir = current_file.parent.parent.parent / "products"
+    else:
+        products_dir = Path(products_dir)
+    
+    if not products_dir.exists():
+        print(f"Products directory not found: {products_dir}")
+        return 0
+    
+    # Find all .md files
+    md_files = list(products_dir.glob("*.md"))
+    
+    if not md_files:
+        print(f"No markdown files found in {products_dir}")
+        return 0
+    
+    count = 0
+    sql = """
+    INSERT INTO products (product_name, product_description)
+    VALUES (%s, %s)
+    ON CONFLICT (product_name) DO UPDATE SET
+        product_description = EXCLUDED.product_description,
+        updated_at = now();
+    """
+    
+    try:
+        with _conn() as conn:
+            with conn.cursor() as cur:
+                for md_file in md_files:
+                    # Use filename without extension as product_name
+                    product_name = md_file.stem
+                    
+                    # Read file content as product_description
+                    try:
+                        product_description = md_file.read_text(encoding='utf-8')
+                        cur.execute(sql, (product_name, product_description))
+                        count += 1
+                        print(f"✓ Inserted/Updated: {product_name}")
+                    except Exception as e:
+                        print(f"✗ Error reading {md_file.name}: {e}")
+                        continue
+                
+                conn.commit()
+    except Exception as e:
+        print(f"Error populating products: {e}")
+        return 0
+    
+    return count
+
+
+def get_all_products() -> List[Dict[str, Any]]:
+    """
+    Retrieve all products from database.
+    
+    Returns:
+        List of dictionaries with product data
+    """
+    sql = """
+    SELECT id, product_name, product_description, created_at, updated_at
+    FROM products
+    ORDER BY product_name;
+    """
+    
+    try:
+        with _conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql)
+                rows = cur.fetchall()
+                
+                return [
+                    {
+                        "id": row[0],
+                        "product_name": row[1],
+                        "product_description": row[2],
+                        "created_at": row[3],
+                        "updated_at": row[4],
+                    }
+                    for row in rows
+                ]
+    except Exception as e:
+        print(f"Error retrieving products: {e}")
+        return []
+
+
+def get_product_by_name(product_name: str) -> Dict[str, Any] | None:
+    """
+    Retrieve a specific product by name.
+    
+    Args:
+        product_name: Name of the product
+        
+    Returns:
+        Dictionary with product data or None if not found
+    """
+    sql = """
+    SELECT id, product_name, product_description, created_at, updated_at
+    FROM products
+    WHERE product_name = %s
+    LIMIT 1;
+    """
+    
+    try:
+        with _conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, (product_name,))
+                row = cur.fetchone()
+                
+                if row is None:
+                    return None
+                
+                return {
+                    "id": row[0],
+                    "product_name": row[1],
+                    "product_description": row[2],
+                    "created_at": row[3],
+                    "updated_at": row[4],
+                }
+    except Exception as e:
+        print(f"Error retrieving product: {e}")
+        return None
+
+
+def init_database() -> None:
+    """
+    Initialize all database tables and populate products.
+    Call this function to set up the entire database schema.
+    """
+    print("Initializing database...")
+    
+    # Create tables
+    print("Creating users table...")
+    init_users_table()
+    
+    print("Creating products table...")
+    init_products_table()
+    
+    # Populate products
+    print("Populating products from markdown files...")
+    count = populate_products()
+    
+    print(f"\n✓ Database initialized successfully!")
+    print(f"  - Users table: ready")
+    print(f"  - Products table: {count} products loaded")
 
