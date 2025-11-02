@@ -30,7 +30,7 @@ APP_ICON = "assets/Raiffeisen_Bank.svg"
 # Default to Claude 4.5 Sonnet via Anthropic provider; can be overridden via env
 DEFAULT_LITELLM_MODEL = os.getenv(
 	"DEFAULT_LITELLM_MODEL",
-	"global.anthropic.claude-sonnet-4-5-20250929-v1:0",
+	"global.anthropic.claude-sonnet-4-20250514-v1:0",
 )
 TEMPERATURE = 0.7
 
