@@ -29,7 +29,15 @@ from src.agents.user_experience_summary_agent import (
 from src.agents.product_title_generation_agent import product_title_agent
 from src.agents.email_summary_agent import email_summary_agent
 from src.agents.financial_plan_agent import generate_financial_plan, format_plan_for_display
+from src.agents.pdf_converter_direct import convert_markdown_to_pdf_direct
 from src.utils.db import save_financial_plan
+
+"""
+Feature flags for LLM-driven enrichments. Disable to avoid extra turns/latency
+and rely solely on the Ranking Agent outputs (justification + recommended_action).
+"""
+USE_PERSONALIZATION_AGENT = False
+USE_TITLE_AGENT = False
 
 apply_button_styling()
 render_sidebar_info()
@@ -211,29 +219,59 @@ if st.button("🔍 Obține Recomandări", type="primary", use_container_width=Tr
                         "name": base_data.get("name", pid),
                         "description": base_data.get("description", ""),
                         "benefits": base_data.get("benefits", []),
-                        "score": product["score"],
+                        "score": product.get("score", 0.5),
+                        # carry over AI justification to use as default summary when skipping LLM
+                        "justification": product.get("justification", ""),
+                        "recommended_action": product.get("recommended_action", ""),
                     })
                 
-                # STEP 3: Summary Personalization Agent - Personalize English summaries for user
-                # Uses Bedrock LLM to adapt base summaries to user's specific situation
-                nest_asyncio.apply()
+                # Store a minimal base list in session BEFORE any LLM personalization
+                # so the UI always renders even if later steps fail
+                base_products_for_ui: list[tuple[str, dict]] = []
+                for p in products_with_descriptions:
+                    base_products_for_ui.append(
+                        (
+                            p["product_id"],
+                            {
+                                "name": p.get("name") or p["product_id"],
+                                "icon": "🏦",  # default icon; refined later
+                                "description": p.get("description", ""),
+                                "benefits": p.get("benefits", []),
+                                "score": p["score"],
+                                "base_summary": p.get("description", ""),
+                                "personalized_summary": "",
+                            },
+                        )
+                    )
+                st.session_state.ranked_products = base_products_for_ui
+                st.session_state.llm_titles = {}
+                st.session_state.user_profile_data = {
+                    "age": age,
+                    "annual_income": annual_income,
+                    "marital_status": marital_status,
+                }
                 
-                context = PersonalizationContext(user_profile=user_profile)
-                
-                async def run_personalization_agent():
-                    # Build hyper-personalized recommendations based on EVERY detail
-                    personalization_requests = []
-                    for product in products_with_descriptions:
-                        personalization_requests.append({
-                            "product_id": product["product_id"],
-                            "product_name": product["name"],
-                            "product_description": product["description"],
-                            "benefits": product["benefits"],
-                            "relevance_score": product["score"],
-                        })
-                    
-                    # Call LLM for deep personalization
-                    prompt = f"""Creează recomandări EXTREM DE PERSONALIZATE pentru fiecare produs bancar bazate pe profilul EXACT al utilizatorului.
+                # STEP 3: Summary Personalization Agent (optional)
+                if USE_PERSONALIZATION_AGENT:
+                    # Uses Bedrock LLM to adapt base summaries to user's specific situation
+                    nest_asyncio.apply()
+
+                    context = PersonalizationContext(user_profile=user_profile)
+
+                    async def run_personalization_agent():
+                        # Build hyper-personalized recommendations based on EVERY detail
+                        personalization_requests = []
+                        for product in products_with_descriptions:
+                            personalization_requests.append({
+                                "product_id": product["product_id"],
+                                "product_name": product["name"],
+                                "product_description": product["description"],
+                                "benefits": product["benefits"],
+                                "relevance_score": product["score"],
+                            })
+
+                        # Call LLM for deep personalization
+                        prompt = f"""Creează recomandări EXTREM DE PERSONALIZATE pentru fiecare produs bancar bazate pe profilul EXACT al utilizatorului.
 
 PROFIL UTILIZATOR COMPLET:
 - Vârstă: {user_profile.age} ani
@@ -338,99 +376,115 @@ Returnează DOAR un array JSON:
   ...
 ]"""
 
-                    result = await Runner.run(
-                        personalization_orchestrator,
-                        prompt,
-                        context=context,
-                    )
-                    return result
-                
-                # Execute personalization agent
-                with concurrent.futures.ThreadPoolExecutor() as executor:
-                    future = executor.submit(asyncio.run, run_personalization_agent())
-                    agent_result = future.result()
-                
-                # Parse LLM output
-                agent_output = agent_result.output if hasattr(agent_result, 'output') else str(agent_result)
-                
-                try:
-                    import re
-                    # Extract JSON array from LLM response
-                    json_match = re.search(r'\[.*?\]', agent_output, re.DOTALL)
-                    if json_match:
-                        personalized_summaries = json.loads(json_match.group())
-                        
-                        # Merge personalized summaries back into products
-                        summary_map = {item["product_id"]: item["personalized_summary"] for item in personalized_summaries}
-                        
-                        for product in products_with_descriptions:
-                            product["personalized_summary"] = summary_map.get(
-                                product["product_id"],
-                                f"{product['description']}"  # Fallback to description if LLM didn't personalize
-                            )
-                    else:
-                        st.warning("⚠️ LLM nu a returnat JSON valid. Folosim descrierile standard.")
+                        result = await Runner.run(
+                            personalization_orchestrator,
+                            prompt,
+                            context=context,
+                            max_turns=3,
+                        )
+                        return result
+
+                    # Execute personalization agent safely so failures don't block UI
+                    try:
+                        with concurrent.futures.ThreadPoolExecutor() as executor:
+                            future = executor.submit(asyncio.run, run_personalization_agent())
+                            agent_result = future.result()
+
+                        # Parse LLM output
+                        agent_output = agent_result.output if hasattr(agent_result, 'output') else str(agent_result)
+
+                        try:
+                            import re
+                            # Extract JSON array from LLM response
+                            json_match = re.search(r'\[.*?\]', agent_output, re.DOTALL)
+                            if json_match:
+                                personalized_summaries = json.loads(json_match.group())
+
+                                # Merge personalized summaries back into products
+                                summary_map = {item["product_id"]: item["personalized_summary"] for item in personalized_summaries}
+
+                                for product in products_with_descriptions:
+                                    product["personalized_summary"] = summary_map.get(
+                                        product["product_id"],
+                                        f"{product['description']}"  # Fallback to description if LLM didn't personalize
+                                    )
+                            else:
+                                st.warning("⚠️ LLM nu a returnat JSON valid. Folosim descrierile standard.")
+                                for product in products_with_descriptions:
+                                    product["personalized_summary"] = product["description"]
+
+                        except Exception as e:
+                            st.warning(f"⚠️ Eroare parsare răspuns LLM: {e}. Folosim descrierile standard.")
+                            for product in products_with_descriptions:
+                                product["personalized_summary"] = product["description"]
+                    except Exception as e:
+                        st.warning(f"⚠️ Personalizarea a eșuat: {e}. Folosim descrierile standard.")
                         for product in products_with_descriptions:
                             product["personalized_summary"] = product["description"]
-                            
-                except Exception as e:
-                    st.warning(f"⚠️ Eroare parsare răspuns LLM: {e}. Folosim descrierile standard.")
+                else:
+                    # Build a concise, actionable summary from justification + recommended action
                     for product in products_with_descriptions:
-                        product["personalized_summary"] = product["description"]
+                        just = product.get("justification") or ""
+                        action = product.get("recommended_action") or ""
+                        combined = just.strip()
+                        if action:
+                            combined = (combined + (" " if combined else "")) + f"Recomandare: {action.strip()}"
+                        product["personalized_summary"] = combined or product.get("description", "")
                 
                 enriched_products = products_with_descriptions
 
-                # STEP 3.5: Generate personalized Romanian titles (no emojis) using Product Title Agent
-                # Build payload from enriched products
-                products_payload = [
-                    {
-                        "product_id": p["product_id"],
-                        "name": p.get("name") or p["product_id"],
-                        "description": p.get("description", ""),
-                        "benefits": p.get("benefits", []),
-                    }
-                    for p in enriched_products
-                ]
-
+                # STEP 3.5: Optional title generation via LLM
                 llm_titles: dict[str, str] = {}
-                try:
-                    async def _run_titles():
-                        prompt = (
-                            "Context utilizator (JSON): "
-                            + user_profile.model_dump_json(ensure_ascii=False)
-                            + "\n\n"
-                            "Produse existente (JSON): "
-                            + json.dumps(products_payload, ensure_ascii=False)
-                            + "\n\n"
-                            "Sarcină: Generează pentru fiecare produs un titlu personalizat, concis și captivant,\n"
-                            "în limba română, potrivit profilului de mai sus. Respectă regulile din instrucțiunile agentului\n"
-                            "și NU folosi emoji-uri în titluri.\n\n"
-                            "Returnează STRICT JSON cu schema: {\n"
-                            "  \"titles\": [\n"
-                            "    {\"product_id\": \"<id>\", \"title\": \"<titlu personalizat>\"}\n"
-                            "  ]\n"
-                            "} (fără text suplimentar)."
-                        )
+                if USE_TITLE_AGENT:
+                    # Build payload from enriched products
+                    products_payload = [
+                        {
+                            "product_id": p["product_id"],
+                            "name": p.get("name") or p["product_id"],
+                            "description": p.get("description", ""),
+                            "benefits": p.get("benefits", []),
+                        }
+                        for p in enriched_products
+                    ]
 
-                        return await Runner.run(product_title_agent, prompt)
-
-                    titles_result = asyncio.run(_run_titles())
-                    raw = titles_result.final_output or "{}"
-                    parsed = {}
                     try:
-                        parsed = json.loads(raw)
-                    except Exception:
-                        start = raw.find("{")
-                        end = raw.rfind("}")
-                        if start != -1 and end != -1 and end > start:
-                            parsed = json.loads(raw[start : end + 1])
-                    for item in parsed.get("titles", []) if isinstance(parsed, dict) else []:
-                        pid = item.get("product_id")
-                        title = item.get("title")
-                        if isinstance(pid, str) and isinstance(title, str):
-                            llm_titles[pid] = title.strip()
-                except Exception as llm_err:
-                    st.warning(f"Nu am putut genera titluri personalizate (LLM): {llm_err}")
+                        async def _run_titles():
+                            prompt = (
+                                "Context utilizator (JSON): "
+                                + user_profile.model_dump_json(ensure_ascii=False)
+                                + "\n\n"
+                                "Produse existente (JSON): "
+                                + json.dumps(products_payload, ensure_ascii=False)
+                                + "\n\n"
+                                "Sarcină: Generează pentru fiecare produs un titlu personalizat, concis și captivant,\n"
+                                "în limba română, potrivit profilului de mai sus. Respectă regulile din instrucțiunile agentului\n"
+                                "și NU folosi emoji-uri în titluri.\n\n"
+                                "Returnează STRICT JSON cu schema: {\n"
+                                "  \"titles\": [\n"
+                                "    {\"product_id\": \"<id>\", \"title\": \"<titlu personalizat>\"}\n"
+                                "  ]\n"
+                                "} (fără text suplimentar)."
+                            )
+
+                            return await Runner.run(product_title_agent, prompt, max_turns=3)
+
+                        titles_result = asyncio.run(_run_titles())
+                        raw = titles_result.final_output or "{}"
+                        parsed = {}
+                        try:
+                            parsed = json.loads(raw)
+                        except Exception:
+                            start = raw.find("{")
+                            end = raw.rfind("}")
+                            if start != -1 and end != -1 and end > start:
+                                parsed = json.loads(raw[start : end + 1])
+                        for item in parsed.get("titles", []) if isinstance(parsed, dict) else []:
+                            pid = item.get("product_id")
+                            title = item.get("title")
+                            if isinstance(pid, str) and isinstance(title, str):
+                                llm_titles[pid] = title.strip()
+                    except Exception as llm_err:
+                        st.warning(f"Nu am putut genera titluri personalizate (LLM): {llm_err}")
 
                 # Prepare UI data: add icons and format for display
                 ICONS = {
@@ -473,11 +527,7 @@ Returnează DOAR un array JSON:
                 # Store in session state to persist across reruns
                 st.session_state.ranked_products = ranked_products
                 st.session_state.llm_titles = llm_titles
-                st.session_state.user_profile_data = {
-                    "age": age,
-                    "annual_income": annual_income,
-                    "marital_status": marital_status
-                }
+                # user_profile_data already stored earlier
                 
                 # Display results
                 st.success("✅ Recomandări generate cu succes!")
@@ -510,7 +560,8 @@ if st.session_state.ranked_products is not None:
                 st.markdown(f"### {idx}. {display_name}")
                 # Match percentage
                 match_percent = int(product['score'] * 100)
-                st.progress(product['score'], text=f"Potrivire: {match_percent}%")
+                st.progress(product['score'])
+                st.caption(f"Potrivire: {match_percent}%")
             with col_select:
                 # Check if product is already selected
                 is_selected = product_id in st.session_state.selected_products
@@ -527,9 +578,10 @@ if st.session_state.ranked_products is not None:
             
 
             # Personalized Romanian recommendation (AI-generated based on user profile)
-            if product.get("personalized_summary"):
+            summary_text = product.get("personalized_summary") or product.get("base_summary") or product.get("description", "")
+            if summary_text:
                 st.markdown("**💡 Recomandare Personalizată:**")
-                st.info(product["personalized_summary"])
+                st.info(summary_text)
             
             # Personalized note for top recommendation
             if idx == 1:
@@ -565,7 +617,7 @@ if st.session_state.ranked_products is not None:
                 # Create an expander for detailed logs
                 log_expander = st.expander("📋 Detalii Trimitere Email (Click pentru logs)", expanded=False)
                 
-                with st.spinner("Generăm emailul și îl trimitem..."):
+                with st.spinner("Generăm emailul HTML și îl trimitem..."):
                     try:
                         # Display SMTP configuration (masked password)
                         with log_expander:
@@ -585,68 +637,137 @@ FROM_EMAIL: {from_email}
                             """)
                             
                             st.write(f"**📧 Destinatar:** {user_email}")
-                            st.write("**📝 Generare conținut email...**")
+                            st.write("**🎨 Generare email HTML profesional Raiffeisen...**")
                         
-                        # Build a compact summary payload (top 5)
-                        top_items = []
-                        for pid, prod in ranked_products[:5]:
-                            top_items.append({
-                                "product_id": pid,
-                                "name_ro": prod.get("name_ro", prod.get("name", "")),
-                                "name_en": prod.get("name_en", prod.get("name", "")),
-                                "score": prod.get("score", 0),
-                                "summary": prod.get("personalized_summary") or prod.get("base_summary", prod.get("description", "")),
-                            })
-
-                        subject = "Recomandările dumneavoastră personalizate - Rezumat"
+                        # Build summary content in Markdown format
+                        with log_expander:
+                            st.write("**📝 Construire conținut recomandări...**")
                         
-                        # Get user profile from session
+                        # Get user profile data
                         user_profile_data = st.session_state.get("user_profile_data", {})
-                        user_profile_json = json.dumps(user_profile_data, ensure_ascii=False)
-                        items_json = json.dumps(top_items, ensure_ascii=False)
+                        age = user_profile_data.get("age", 35)
+                        annual_income = user_profile_data.get("annual_income", 50000)
+                        marital_status = user_profile_data.get("marital_status", "necăsătorit/ă")
+                        
+                        # Build Markdown content with top products
+                        markdown_content = f"""# Recomandările Dumneavoastră Personalizate
 
+**Data:** {asyncio.get_event_loop().time() if hasattr(asyncio, 'get_event_loop') else '02 Noiembrie 2025'}  
+**Consultant:** Raiffeisen Banking & Advisory
+
+---
+
+## Rezumat Profil
+
+Am analizat profilul dumneavoastră financiar și am identificat produsele cele mai potrivite pentru situația și obiectivele dumneavoastră.
+
+**Profilul dumneavoastră:**
+- Vârstă: {age} ani
+- Venit anual: {annual_income:,.0f} RON ({annual_income/12:,.0f} RON/lună)
+- Status: {marital_status}
+
+---
+
+## Produse Recomandate
+
+"""
+                        
+                        # Add top 5 products
+                        top_count = min(5, len(ranked_products))
+                        for idx, (pid, prod) in enumerate(ranked_products[:top_count], 1):
+                            product_name = llm_titles.get(pid, prod.get("name", pid))
+                            summary = prod.get("personalized_summary", "")
+                            score = int(prod.get("score", 0) * 100)
+                            
+                            markdown_content += f"""### {idx}. {product_name}
+
+**Potrivire:** {score}% compatibil cu profilul dumneavoastră
+
+{summary}
+
+---
+
+"""
+                        
+                        # Add call to action
+                        markdown_content += """## Pași Următori
+
+Pentru a accesa aceste produse și a discuta detaliile:
+
+1. Programați o consultanță gratuită cu un specialist Raiffeisen
+2. Pregătiți documentele necesare (CI, adeverință venit)
+3. Contactați-ne la numărul *2000 (gratuit)
+
+---
+
+*Recomandări generate de NEXXT AI Banking Assistant*  
+*Pentru consultanță personalizată, contactați echipa Raiffeisen Banking & Advisory*
+"""
+                        
                         with log_expander:
-                            st.write(f"**📋 Subiect email:** {subject}")
-                            st.write(f"**🎯 Produse incluse:** {len(top_items)}")
-
-                        prompt = (
-                            f"Recipient: {user_email}\n"
-                            f"Subject: {subject}\n\n"
-                            "Instrucțiuni: Redactează un email scurt în limba română (fără emoji), politicos, "
-                            "cu un rezumat al recomandărilor de mai jos. Menține 120–200 cuvinte, listează 3–5 produse cu câte o propoziție.\n\n"
-                            f"Profil utilizator (JSON): {user_profile_json}\n\n"
-                            f"Produse (JSON): {items_json}\n\n"
-                            "După ce finalizezi textul emailului, apelează tool-ul send_email cu câmpurile: to, subject, body."
+                            st.write(f"**✅ Conținut Markdown generat:** {len(markdown_content)} caractere")
+                            st.write("**� Conversie Markdown → HTML Raiffeisen...**")
+                        
+                        # Convert to HTML with Raiffeisen design
+                        from src.utils.html_converter import convert_financial_plan_to_html, clean_markdown_for_email
+                        
+                        # Get user name if available from session
+                        user_name = st.session_state.get("auth", {}).get("email", "").split("@")[0].title()
+                        
+                        cleaned_md = clean_markdown_for_email(markdown_content)
+                        html_content = convert_financial_plan_to_html(
+                            cleaned_md,
+                            client_name=user_name if user_name else None,
+                            client_age=age,
+                            client_income=annual_income
                         )
-
+                        
                         with log_expander:
-                            st.write("**🤖 Apelare AI Agent pentru generare email...**")
+                            st.write(f"**✅ HTML generat:** {len(html_content)} caractere")
+                            st.write(f"**🎨 Design:** Raiffeisen Bank (Galben #FFED00 & Alb)")
+                            st.write("**📤 Trimitere email HTML...**")
+
+                        subject = "Recomandările Dumneavoastră Personalizate - Raiffeisen Bank"
 
                         async def _send():
-                            """Trimite email folosind MCP Email Server cu conexiune explicită."""
+                            """Trimite email HTML folosind MCP Email Server."""
                             from agents.mcp import MCPServerStdio
                             from src.utils.mcp_email_client import get_mcp_email_server_config
                             from src.config.settings import build_default_litellm_model
                             from agents import Agent, ModelSettings
+                            from src.agents.html_email_agent import html_email_agent
                             
                             # Creează și conectează MCP serverul
                             mcp_server = MCPServerStdio(get_mcp_email_server_config())
                             await mcp_server.connect()
                             
-                            # Creează agent cu MCP server conectat
-                            temp_agent = Agent(
-                                name="Email Summary Sender",
-                                instructions=email_summary_agent.instructions,
-                                mcp_servers=[mcp_server],
-                                model=build_default_litellm_model(),
-                                model_settings=ModelSettings(include_usage=True),
-                            )
+                            # Configurează agentul HTML cu MCP server
+                            html_email_agent.mcp_servers = [mcp_server]
+                            html_email_agent.model = build_default_litellm_model()
+                            html_email_agent.model_settings = ModelSettings(include_usage=True)
+                            
+                            # Prompt pentru agent
+                            prompt = f"""Send an HTML email with the following details:
+
+RECIPIENT: {user_email}
+SUBJECT: {subject}
+
+HTML BODY (complete HTML document with Raiffeisen branding):
+{html_content}
+
+CRITICAL INSTRUCTIONS:
+- Use send_email tool
+- Set html parameter to boolean true (not string, actual boolean)
+- This enables HTML rendering in the email client
+- Send immediately without modifying the HTML
+
+Please send this professional HTML email now."""
                             
                             # Rulează agentul
-                            return await Runner.run(temp_agent, prompt)
+                            return await Runner.run(html_email_agent, prompt)
 
                         with log_expander:
-                            st.write("**📤 Trimitere email prin MCP Server...**")
+                            st.write("**📤 Trimitere email HTML prin MCP Server...**")
                         
                         send_result = asyncio.run(_send())
                         
@@ -660,7 +781,7 @@ FROM_EMAIL: {from_email}
                             else:
                                 st.write(str(send_result))
                         
-                        st.success(f"✅ **Email trimis cu succes către: {user_email}**\n\nVerifică inbox-ul (și folder-ul Spam)!")
+                        st.success(f"✅ **Email HTML trimis cu succes către: {user_email}**\n\n🎨 Design: Raiffeisen Bank (Galben & Alb)\n\nVerifică inbox-ul (și folder-ul Spam)!")
                         
                     except Exception as e:
                         error_msg = str(e)
@@ -765,8 +886,9 @@ FROM_EMAIL: {from_email}
                                 plan_text = generate_financial_plan(profile_data, selected_products_data)
                                 formatted_plan = format_plan_for_display(plan_text)
                                 
-                                # Store in session state for download
+                                # Store in session state for download and PDF conversion
                                 st.session_state["generated_financial_plan"] = formatted_plan
+                                st.session_state["plan_profile_data"] = profile_data  # Save for PDF filename
                                 
                                 # Save to database if user is logged in
                                 user_email = st.session_state.get("auth", {}).get("email")
@@ -779,20 +901,6 @@ FROM_EMAIL: {from_email}
                                 else:
                                     st.success("✅ **Plan financiar generat cu succes!**")
                                     st.info("ℹ️ **Autentificați-vă pentru a salva planul în contul dumneavoastră.**")
-                                
-                                # Display plan in expandable section
-                                with st.expander("📄 Vizualizare Plan Financiar Complet", expanded=True):
-                                    st.markdown(formatted_plan)
-                                
-                                # Download button
-                                st.download_button(
-                                    label="📥 Descarcă Planul Financiar (Markdown)",
-                                    data=formatted_plan,
-                                    file_name=f"plan_financiar_{profile_data.get('first_name', 'client')}_{profile_data.get('last_name', '')}.md",
-                                    mime="text/markdown",
-                                    use_container_width=True,
-                                    type="secondary"
-                                )
                                 
                             except ValueError as ve:
                                 st.error(f"❌ **Eroare de validare:** {str(ve)}")
@@ -808,6 +916,158 @@ FROM_EMAIL: {from_email}
             if st.button("🗑️ Șterge Selecția", type="secondary", use_container_width=True):
                 st.session_state.selected_products = []
                 st.rerun()
+
+# ============================================================================
+# SECȚIUNE: AFIȘARE PLAN FINANCIAR GENERAT (PERSISTENT)
+# ============================================================================
+if "generated_financial_plan" in st.session_state and st.session_state["generated_financial_plan"]:
+    st.divider()
+    st.header("📋 Plan Financiar Generat")
+    
+    # Display the financial plan
+    with st.expander("📄 Vizualizare Plan Financiar Complet", expanded=True):
+        st.markdown(st.session_state["generated_financial_plan"])
+    
+    # Action buttons
+    col_download_md, col_convert_pdf = st.columns(2)
+    
+    with col_download_md:
+        # Download Markdown button
+        profile_data = st.session_state.get("plan_profile_data", {})
+        st.download_button(
+            label="📥 Descarcă Markdown",
+            data=st.session_state["generated_financial_plan"],
+            file_name=f"plan_financiar_{profile_data.get('first_name', 'client')}_{profile_data.get('last_name', '')}.md",
+            mime="text/markdown",
+            use_container_width=True,
+            type="secondary",
+            key="download_md_persistent"
+        )
+    
+    with col_convert_pdf:
+        # Convert to PDF button
+        if st.button("📄 Generează PDF", use_container_width=True, type="primary", key="generate_pdf_persistent"):
+            st.session_state["pdf_conversion_running"] = True
+            st.rerun()
+
+# ============================================================================
+# SECȚIUNE: PROCESARE CONVERSIE PDF (DACĂ ESTE ACTIVĂ)
+# ============================================================================
+if st.session_state.get("pdf_conversion_running", False):
+    st.divider()
+    st.header("🔄 Conversie Markdown → PDF")
+    
+    # Create containers for logs and results
+    log_container = st.container()
+    result_container = st.container()
+    
+    with log_container:
+        st.subheader("📋 Log Conversie în Timp Real")
+        log_area = st.empty()
+    
+    with result_container:
+        st.subheader("📊 Rezultat Conversie")
+        result_area = st.empty()
+    
+    try:
+        # Get data from session state
+        formatted_plan = st.session_state["generated_financial_plan"]
+        profile_data = st.session_state.get("plan_profile_data", {})
+        pdf_filename = f"plan_financiar_{profile_data.get('first_name', 'client')}_{profile_data.get('last_name', '')}.pdf"
+        
+        # Collect logs in session state for display
+        if "pdf_logs" not in st.session_state:
+            st.session_state["pdf_logs"] = []
+        
+        def progress_callback(message):
+            """Callback to capture logs in real-time."""
+            st.session_state["pdf_logs"].append(message)
+            # Display all logs so far
+            with log_area.container():
+                st.info("🔄 **Conversie în progres...**")
+                for log_msg in st.session_state["pdf_logs"]:
+                    st.text(log_msg)
+        
+        with st.spinner("⏳ Convertesc planul în PDF..."):
+            # Convert to PDF using direct pypandoc (fast, no timeout issues)
+            pdf_path, message, logs = convert_markdown_to_pdf_direct(
+                formatted_plan,
+                pdf_filename,
+                progress_callback=progress_callback
+            )
+        
+        # Conversion successful!
+        with log_area.container():
+            st.success("✅ **Conversie completă!**")
+            with st.expander("📋 Vezi Log Complet Conversie", expanded=False):
+                for log in logs:
+                    st.code(log, language=None)
+        
+        with result_area.container():
+            st.success(f"✅ **{message}**")
+            st.info(f"📁 **Locație fișier:** `{pdf_path}`")
+            
+            # Get file info
+            from pathlib import Path
+            file_size = Path(pdf_path).stat().st_size
+            st.metric("📊 Dimensiune PDF", f"{file_size/1024:.1f} KB")
+            
+            # Offer download
+            with open(pdf_path, 'rb') as pdf_file:
+                st.download_button(
+                    label="⬇️ Descarcă PDF Generat",
+                    data=pdf_file.read(),
+                    file_name=pdf_filename,
+                    mime="application/pdf",
+                    use_container_width=True,
+                    type="primary",
+                    key="download_pdf_final"
+                )
+            
+            st.info("💡 **Tip:** Poți regenera PDF-ul oricând apăsând din nou butonul 'Generează PDF'")
+        
+        # Reset conversion flag
+        st.session_state["pdf_conversion_running"] = False
+        st.session_state["pdf_logs"] = []
+        
+    except RuntimeError as re:
+        with log_area.container():
+            st.error("❌ **Eroare în timpul conversiei**")
+            if st.session_state.get("pdf_logs"):
+                with st.expander("📋 Log până la eroare", expanded=True):
+                    for log in st.session_state["pdf_logs"]:
+                        st.code(log, language=None)
+        
+        with result_area.container():
+            st.error(f"❌ **Eroare la conversia PDF:** {str(re)}")
+            st.warning(
+                "💡 **Asigurați-vă că sunt instalate:**\n"
+                "- `pandoc` (brew install pandoc)\n"
+                "- `texlive` (brew install texlive)\n"
+                "- `mcp-pandoc` (pip install mcp-pandoc)"
+            )
+        
+        # Reset conversion flag
+        st.session_state["pdf_conversion_running"] = False
+        st.session_state["pdf_logs"] = []
+        
+    except Exception as e:
+        with log_area.container():
+            st.error("❌ **Eroare neașteptată**")
+            if st.session_state.get("pdf_logs"):
+                with st.expander("📋 Log până la eroare", expanded=True):
+                    for log in st.session_state["pdf_logs"]:
+                        st.code(log, language=None)
+        
+        with result_area.container():
+            st.error(f"❌ **Eroare neașteptată la conversie:** {str(e)}")
+            import traceback
+            with st.expander("🔍 Detalii Tehnice Complete", expanded=True):
+                st.code(traceback.format_exc())
+        
+        # Reset conversion flag
+        st.session_state["pdf_conversion_running"] = False
+        st.session_state["pdf_logs"] = []
 
 # Information sidebar
 with st.sidebar:

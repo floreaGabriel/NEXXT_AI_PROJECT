@@ -263,7 +263,7 @@ def create_hyper_personalized_recommendation(
 # --- Specialized Personalization Agent ------------------------------------------------------
 
 personalization_specialist = Agent[PersonalizationContext](
-    name="Hyper-Personalization Specialist",
+    name="HyperPersonalizationSpecialist",
     instructions=(
         "Ești expert în crearea de recomandări bancare EXTREM DE PERSONALIZATE cu sfaturi concrete.\n\n"
         
@@ -313,7 +313,7 @@ personalization_specialist = Agent[PersonalizationContext](
 
 
 personalization_orchestrator = Agent[PersonalizationContext](
-    name="Orchestrator Personalizare Avansată",
+    name="PersonalizationOrchestrator",
     instructions=(
         "Coordonezi procesul de personalizare avansată pentru produsele bancare Raiffeisen.\n"
         "Primești produse cu descrieri oficiale și profile complete de utilizatori, apoi delegi "

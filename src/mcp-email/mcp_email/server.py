@@ -29,14 +29,15 @@ from mcp.types import Tool, TextContent
 app = Server("mcp-email")
 
 
-def _send_email_smtp(to: str, subject: str, body: str, from_email: str | None = None) -> dict[str, Any]:
+def _send_email_smtp(to: str, subject: str, body: str, from_email: str | None = None, html: bool = False) -> dict[str, Any]:
     """Send an email via SMTP.
     
     Args:
         to: Recipient email address
         subject: Email subject line
-        body: Email body content (plain text)
+        body: Email body content (plain text or HTML)
         from_email: Optional sender email (overrides FROM_EMAIL env var)
+        html: If True, send body as HTML; if False, send as plain text
         
     Returns:
         Dictionary with status and message
@@ -62,7 +63,12 @@ def _send_email_smtp(to: str, subject: str, body: str, from_email: str | None = 
     msg["From"] = sender
     msg["To"] = to
     msg["Subject"] = subject
-    msg.set_content(body)
+    
+    # Set content based on html flag
+    if html:
+        msg.set_content(body, subtype='html')
+    else:
+        msg.set_content(body)
 
     try:
         if use_tls:
@@ -124,11 +130,16 @@ async def list_tools() -> list[Tool]:
                     },
                     "body": {
                         "type": "string",
-                        "description": "Email body content in plain text (required)",
+                        "description": "Email body content in plain text or HTML (required)",
                     },
                     "from_email": {
                         "type": "string",
                         "description": "Optional sender email address (overrides FROM_EMAIL env var)",
+                    },
+                    "html": {
+                        "type": "boolean",
+                        "description": "If true, send body as HTML email; if false (default), send as plain text",
+                        "default": False,
                     },
                 },
                 "required": ["to", "subject", "body"],
@@ -147,12 +158,13 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
     subject = arguments.get("subject")
     body = arguments.get("body")
     from_email = arguments.get("from_email")
+    html = arguments.get("html", False)
 
     if not to or not subject or not body:
         raise ValueError("Missing required parameters: to, subject, and body are required")
 
     # Execute the email sending
-    result = _send_email_smtp(to=to, subject=subject, body=body, from_email=from_email)
+    result = _send_email_smtp(to=to, subject=subject, body=body, from_email=from_email, html=html)
 
     # Format response
     if result["status"] == "success":
