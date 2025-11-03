@@ -83,7 +83,7 @@ Every customer receives content tailored to their:
 - **Florea Cristian Gabriel** ([@floreaGabriel](https://github.com/floreaGabriel)) - AI Architecture & Integration
 - **Stan Sabin** ([@SabinGhost19](https://github.com/SabinGhost19)) - AI Architecture & Integration
 - **Luca-Teodor Apahidean** ([@lucaapahidean](https://github.com/lucaapahidean)) - AI Architecture & Integration
-- **Gaitan Nioclai** ([@SabinGhost19](https://github.com/SabinGhost19)) - Machine Learning & Risk Models
+- **Gaitan Nicolai** ([@Nicky261](https://github.com/Nicky261)) - Machine Learning & Risk Models
   
 
 ## 🏆 Hackathon Context
